@@ -1,0 +1,496 @@
+/* 悬浮窗：窄、紧凑，配色沿用 style.css 的变量 */
+
+[hidden] {
+  display: none !important;
+}
+
+html,
+body.mini {
+  background: var(--surface-1);
+  overflow: hidden;
+}
+
+body.mini {
+  font-size: 12px;
+  user-select: none;
+}
+
+.mini-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 8px 6px 12px;
+  cursor: move;
+}
+
+/* 设置里给这台电脑起了名字时显示名字，太长截断 */
+.mini-brand {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.mini-head .status {
+  flex: none;
+  font-size: 11px;
+}
+
+.mini-actions {
+  flex: none;
+  margin-left: auto;
+  display: flex;
+  gap: 2px;
+}
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.icon-btn:hover {
+  background: var(--hover);
+  color: var(--text-primary);
+}
+
+#mini {
+  padding: 0 12px 10px;
+}
+
+.m-section + .m-section {
+  border-top: 1px solid var(--grid);
+  margin-top: 8px;
+  padding-top: 8px;
+}
+
+/* 硬件：每行是标签 · 进度条 · 数值，各行共用一个网格，数值列取最宽的那行，几条进度条一样长 */
+.m-hw {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  column-gap: 8px;
+  align-items: center;
+}
+
+/* 几块主显卡时标签带编号（GPU1、显存1） */
+.m-hw.multi-gpu {
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+}
+
+.m-row {
+  display: contents;
+}
+
+.m-row > .m-label,
+.m-row > .m-value {
+  line-height: 20px;
+}
+
+/* 名字放不进标签列（只有核显时的“共享显存（借用内存）”）：名字占标签列和进度条列，进度条放到下一行，和其他行的对齐 */
+.m-row.wide > .m-label {
+  grid-column: 1 / 3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.m-row.wide > .m-bar {
+  grid-column: 2;
+  margin: 2px 0;
+}
+
+.m-label {
+  color: var(--text-secondary);
+}
+
+.m-value {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.m-value .unit {
+  color: var(--text-secondary);
+  font-weight: 400;
+}
+
+.m-bar {
+  height: 5px;
+  border-radius: 3px;
+  background: var(--track);
+  overflow: hidden;
+}
+
+.m-fill {
+  height: 100%;
+  width: 0;
+  border-radius: 3px;
+  background: var(--series-1);
+  transition: width 0.3s ease;
+}
+
+.m-row.is-warning .m-fill {
+  background: var(--warning);
+}
+
+.m-row.is-critical .m-fill {
+  background: var(--critical);
+}
+
+/* 补充的一行（温度、频率…）从进度条下面开始 */
+.m-sub {
+  grid-column: 2 / -1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 16px;
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.m-spark {
+  grid-column: 1 / -1;
+  display: block;
+  width: 100%;
+  height: 26px;
+  margin: 2px 0 4px;
+}
+
+/* 模型服务 */
+.rt + .rt {
+  margin-top: 8px;
+}
+
+.rt-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rt-name {
+  flex: none;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* 模型服务用的显卡：一行放不下时截掉它，名字和状态留着。模型服务的状态都很短（生成中、空闲…），
+   有显卡名字时状态不收缩；状态只要被挤掉零点几像素，中文就会折到第二行 */
+.rt-gpu {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.rt-gpu ~ .rt-state {
+  flex: none;
+  white-space: nowrap;
+}
+
+.rt-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.rt-state .chip-dot {
+  display: inline-flex;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.rt-state[data-status="busy"] {
+  color: var(--text-primary);
+}
+
+.rt-state[data-status="busy"] .chip-dot {
+  background: var(--series-1);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.rt-state[data-status="waiting"] {
+  color: var(--text-primary);
+}
+
+.rt-state[data-status="waiting"] .chip-dot {
+  background: var(--warning);
+}
+
+.rt-state[data-status="loading"] .chip-dot,
+.rt-state[data-status="starting"] .chip-dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 2px var(--series-1);
+}
+
+.rt-state[data-status="offline"] .chip-dot,
+.rt-state[data-status="error"] .chip-dot {
+  background: var(--critical);
+}
+
+/* 数据过期：轮询很慢或卡住时才出现，靠右，块里的数字变淡 */
+.rt-stale {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  color: var(--text-secondary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.rt-stale .status-icon svg {
+  width: 12px;
+  height: 12px;
+}
+
+.rt.is-stale .rt-main,
+.rt.is-stale .rt-sub {
+  opacity: 0.5;
+}
+
+/* 一行放不下时截掉状态文字（和显卡名字），名字和过期提示留着；状态点不闪 */
+.rt.is-stale .rt-state {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.rt.is-stale .rt-state .chip-dot {
+  flex: none;
+  animation: none;
+}
+
+.rt-main {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 2px;
+  min-width: 0;
+}
+
+.rt-big {
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.rt-unit {
+  color: var(--text-secondary);
+}
+
+/* 一行放不下时只截断后面的文字，数字和单位不折行 */
+.rt-big,
+.rt-unit {
+  flex: none;
+  white-space: nowrap;
+}
+
+.rt-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+
+.rt-sub {
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.m-empty {
+  color: var(--text-muted);
+}
+
+/* 块里的“xxx 已完成”，点一下不再显示 */
+.rt-done {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.rt-done .status-icon {
+  flex: none;
+}
+
+.rt-done .status-icon svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* 余额一行：窗口窄放不下时换行，不截断，悬浮窗跟着变高 */
+.rt-sub.rt-wrap {
+  white-space: normal;
+  overflow: visible;
+}
+
+/* 换行时不拆开的一段（名字、“今天已用 5.22 元”这样的一段） */
+.nowrap {
+  white-space: nowrap;
+}
+
+/* 空闲的服务和工具折成一行，窗口窄放不下时在名字之间换行；
+   状态点按第一行的基线对齐（空元素的基线是它的底边），换行后还在第一行 */
+.m-idle {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.rt + .m-idle {
+  margin-top: 8px;
+}
+
+/* 额度一行：快用完时前面的提醒图标和文字一样高 */
+.rt-quota .status-icon {
+  margin-right: 4px;
+  vertical-align: -2px;
+}
+
+.rt-quota .status-icon svg {
+  width: 12px;
+  height: 12px;
+}
+
+.rt-quota-name {
+  margin-right: 4px;
+  color: var(--text-secondary);
+}
+
+/* 空闲工具的额度：在空闲那一行下面，和它的文字对齐（状态点 7px + 间距 6px） */
+.m-quota {
+  margin-top: 2px;
+  padding-left: 13px;
+}
+
+.m-idle .chip-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+body.mini.stale #mini {
+  opacity: 0.5;
+}
+
+/* ---------- 小窗模式：没有进度条和折线，只有数字 ---------- */
+
+#compact .to-full,
+body.compact #compact .to-compact {
+  display: none;
+}
+
+body.compact #compact .to-full {
+  display: block;
+}
+
+body.compact .mini-head {
+  padding: 6px 6px 4px 10px;
+}
+
+body.compact #mini {
+  padding: 0 10px 8px;
+}
+
+body.compact .m-section + .m-section {
+  margin-top: 6px;
+  padding-top: 6px;
+}
+
+body.compact .rt + .rt,
+body.compact .rt + .m-idle {
+  margin-top: 6px;
+}
+
+body.compact .rt-big {
+  font-size: 15px;
+}
+
+/* 左列百分比、右列用量 */
+.c-grid {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0 12px;
+}
+
+.c-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 20px;
+}
+
+.c-cell .m-label {
+  flex: none;
+  width: 26px;
+}
+
+.c-grid.multi-gpu .c-cell .m-label {
+  width: 36px;
+}
+
+/* 比“显存”长的名字（只有核显时的“共享显存”）按实际宽度 */
+.c-grid .c-cell .m-label.wide {
+  width: auto;
+}
+
+.c-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.c-value .status-icon {
+  margin-right: 3px;
+  vertical-align: -2px;
+}
+
+.c-value .status-icon svg {
+  width: 12px;
+  height: 12px;
+}
+
+.c-num {
+  font-weight: 600;
+}
+
+.c-extra {
+  color: var(--text-muted);
+}

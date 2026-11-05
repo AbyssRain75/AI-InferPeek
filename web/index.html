@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI InferPeek</title>
+    <link rel="stylesheet" href="style.css" />
+    <script type="module" src="app.js"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar-title">
+        <h1 class="title-line"><span class="brand">AI InferPeek</span><span class="device-name" id="device-name"></span></h1>
+        <div class="machine" id="machine"></div>
+      </div>
+      <div class="topbar-actions">
+        <div class="status" id="status" role="status"><span class="dot"></span><span class="label">连接中…</span></div>
+        <button id="theme" class="btn" type="button">主题：跟随系统</button>
+        <a class="btn" href="settings.html" title="监控哪些工具、数据目录、手动添加的服务地址">设置</a>
+      </div>
+    </header>
+    <div class="filters">
+      <span class="filter-label" id="range-label">时间范围</span>
+      <div class="seg" id="range" role="radiogroup" aria-labelledby="range-label">
+        <button type="button" role="radio" data-sec="60" aria-checked="true">1 分钟</button>
+        <button type="button" role="radio" data-sec="300" aria-checked="false">5 分钟</button>
+        <button type="button" role="radio" data-sec="600" aria-checked="false">10 分钟</button>
+      </div>
+    </div>
+    <main class="board" id="board"></main>
+  </body>
+</html>

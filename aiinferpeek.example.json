@@ -1,0 +1,14 @@
+{
+  "device_name": null,
+  "endpoints": [],
+  "disabled_tools": [],
+  "ollama_log": null,
+  "claude_dir": null,
+  "codex_dir": null,
+  "dsh_dir": null,
+  "grok_dir": null,
+  "opencode_dir": null,
+  "openclaw_dir": null,
+  "antigravity_dir": null,
+  "balance_warning": null
+}

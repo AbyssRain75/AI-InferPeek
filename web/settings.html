@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI InferPeek 设置</title>
+    <link rel="stylesheet" href="style.css" />
+    <script type="module" src="settings.js"></script>
+  </head>
+  <body class="settings-page">
+    <header class="topbar">
+      <a class="brand brand-link" href="./">AI InferPeek</a>
+      <div class="machine">设置</div>
+      <div class="topbar-actions">
+        <a class="btn" href="./">返回看板</a>
+      </div>
+    </header>
+    <main class="settings" id="settings">
+      <p class="empty">正在读取设置…</p>
+    </main>
+    <footer class="save-bar" id="save-bar" hidden>
+      <button type="button" class="btn btn-primary" id="save" disabled>保存</button>
+      <button type="button" class="btn" id="revert" disabled>撤销修改</button>
+      <span class="save-msg" id="save-msg" role="status" aria-live="polite"></span>
+    </footer>
+  </body>
+</html>
