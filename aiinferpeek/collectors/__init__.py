@@ -16,9 +16,11 @@ from .runtimes import RuntimesCollector
 from .system import CpuCollector, MemoryCollector
 
 
-def default_collectors(config=None):
+def default_collectors(config=None, interval=1.0):
+    """interval 是采样间隔（秒）。"""
     config = config or {}
-    manager = RuntimeManager(default_adapters(config), endpoints=config.get("endpoints", ()))
+    # 采样比每秒一次慢时轮询跟着慢，多轮询的结果没人取；但不比每秒一次更快，各适配器是按每秒轮询一次设计的
+    manager = RuntimeManager(default_adapters(config), endpoints=config.get("endpoints", ()), interval=max(1.0, interval))
     gpus = GpuCollector()
     return [
         DeviceCollector(config),
@@ -26,5 +28,5 @@ def default_collectors(config=None):
         CpuCollector(),
         MemoryCollector(),
         gpus,
-        GpuProcessCollector(owners=manager.owners, luids=gpus.main_luids, devices=gpus.luid_index),
+        GpuProcessCollector(owners=manager.owners, luids=gpus.main_luids, devices=gpus.luid_index, vram_limit=gpus.main_mem_total()),
     ]

@@ -2,15 +2,16 @@
 // 看板（“正在运行的模型”卡片底部的“没看到某个工具？”、一个都没发现时的“模型服务”卡片）和设置页面共用这里的写法。
 
 import { h, num, icon, chevron, card } from './ui.js';
+import { tr } from './i18n.js';
 
 export const DIAG_REFRESH_MS = 5000; // 后台每 5 秒发现一次，页面也每 5 秒取一次
-export const DIAG_STATE = { ok: '已发现', warning: '有问题', probing: '正在连接', missing: '没有发现' };
-export const DIAG_SCOPE = '仅检测进程运行状态、端口监听及数据目录是否存在，不读取任何对话内容。';
+export const DIAG_STATE = { ok: tr('已发现'), warning: tr('有问题'), probing: tr('正在连接'), missing: tr('没有发现') };
+export const DIAG_SCOPE = tr('仅检测进程运行状态、端口监听及数据目录是否存在，不读取任何对话内容。');
 const PATH_TEXT = {
-  home: ['数据目录不存在', '打不开数据目录'],
-  data: ['数据目录里没有会话文件夹', '打不开会话文件夹'],
-  db: ['数据目录里没有会话数据库', '打不开会话数据库'],
-  log: ['找不到日志文件', '打不开日志文件'],
+  home: [tr('数据目录不存在'), tr('无法打开数据目录')],
+  data: [tr('数据目录中不存在会话文件夹'), tr('无法打开会话文件夹')],
+  db: [tr('数据目录中不存在会话数据库'), tr('无法打开会话数据库')],
+  log: [tr('未找到日志文件'), tr('无法打开日志文件')],
 };
 export const hostOf = (url) => (url || '').replace(/^https?:\/\//, '');
 const pathEl = (path) => h('span', { class: 'diag-path', text: path });
@@ -21,36 +22,36 @@ const pathEl = (path) => h('span', { class: 'diag-path', text: path });
 export function diagnosticLine(c, tool) {
   switch (c.code) {
     case 'found':
-      if (c.configured) return { text: `配置文件里的地址 ${hostOf(c.url)}` };
-      return { text: c.url ? `${hostOf(c.url)} · 进程 ${c.pid}` : `${c.processes} 个进程` };
+      if (c.configured) return { text: tr('配置文件中的地址 {url}', { url: hostOf(c.url) }) };
+      return { text: c.url ? `${hostOf(c.url)} · ${tr('进程 {pid}', { pid: c.pid })}` : tr('{n} 个进程', { n: c.processes }) };
     case 'offline':
       return {
-        text: c.configured ? `配置文件里加的地址连不上：${hostOf(c.url)}` : `进程 ${c.pid} 的 ${hostOf(c.url)} 现在连不上`,
+        text: c.configured ? tr('无法连接配置文件中添加的地址：{url}', { url: hostOf(c.url) }) : tr('进程 {pid} 的 {url} 当前无法连接', { pid: c.pid, url: hostOf(c.url) }),
         detail: c.error,
       };
     case 'poll_error':
-      return { text: '已发现，但读取出错', detail: c.error };
+      return { text: tr('已发现，但读取出错'), detail: c.error };
     case 'find_error':
-      return { text: '查找进程时出错', detail: c.error };
+      return { text: tr('查找进程时出错'), detail: c.error };
     case 'no_process':
-      return { text: c.names?.length ? `没有找到进程（认 ${c.names.join('、')}）` : '没有找到进程', detail: c.hint };
+      return { text: c.names?.length ? tr('未找到进程（可识别 {names}）', { names: c.names.join(tr('、')) }) : tr('未找到进程'), detail: c.hint };
     case 'no_port':
-      return { text: `进程 ${c.pid} 在运行，但还没有监听端口`, detail: '可能还在启动' };
+      return { text: tr('进程 {pid} 正在运行，但尚未监听端口', { pid: c.pid }), detail: tr('可能仍在启动') };
     case 'ports_unknown':
-      return { text: `进程 ${c.pid} 在运行，但读不到它监听的端口`, detail: c.error };
+      return { text: tr('进程 {pid} 正在运行，但无法获取其监听的端口', { pid: c.pid }), detail: c.error };
     case 'probing':
-      return { text: `进程 ${c.pid} 在运行，正在探测它监听的端口`, addrs: c.addrs };
+      return { text: tr('进程 {pid} 正在运行，正在探测其监听的端口', { pid: c.pid }), addrs: c.addrs };
     case 'probe_failed':
-      return { text: `进程 ${c.pid} 在运行，但监听的端口都探测失败`, addrs: c.addrs };
+      return { text: tr('进程 {pid} 正在运行，但监听的端口均探测失败', { pid: c.pid }), addrs: c.addrs };
     case 'missing_path': {
       const [missing, broken] = PATH_TEXT[c.role] || PATH_TEXT.home;
-      const where = c.key ? `可以在 aiinferpeek.json 的 ${c.key} 里改成实际位置` : '';
+      const where = c.key ? tr('可在 aiinferpeek.json 的 {key} 中改为实际位置', { key: c.key }) : '';
       // 工具没在运行时多半只是没装
-      const unused = `未运行或未使用 ${tool.label} 时可忽略此项`;
-      const detail = c.level === 'info' && c.role !== 'log' ? (where ? `${unused}；装在别处时${where}` : unused) : where;
+      const unused = tr('未运行或未使用 {tool} 时可忽略此项', { tool: tool.label });
+      const detail = c.level === 'info' && c.role !== 'log' ? (where ? tr('{unused}；安装在其他位置时{where}', { unused, where }) : unused) : where;
       return {
-        text: [`${c.error ? broken : missing}：`, pathEl(c.path), c.role === 'log' ? '，统计不到每次请求' : ''],
-        detail: [c.error, detail].filter(Boolean).join('。'),
+        text: [tr('{what}：', { what: c.error ? broken : missing }), pathEl(c.path), c.role === 'log' ? tr('，无法统计每次请求') : ''],
+        detail: [c.error, detail].filter(Boolean).join(tr('。')),
       };
     }
     default:
@@ -78,7 +79,7 @@ export function diagLineEl(c, tool) {
       ? h(
           'ul',
           { class: 'diag-addrs' },
-          ...line.addrs.map((a) => h('li', {}, hostOf(a.url), h('span', { class: 'diag-detail', text: ` · ${a.error || '待探测'}` }))),
+          ...line.addrs.map((a) => h('li', {}, hostOf(a.url), h('span', { class: 'diag-detail', text: ` · ${a.error || tr('待探测')}` }))),
         )
       : null,
   );
@@ -87,10 +88,15 @@ export function diagLineEl(c, tool) {
 // 一条检测情况写成一句（不列地址），设置页面放在输入框、地址下面
 export const diagSummaryEl = (c, tool) => h('span', {}, ...lineParts(diagnosticLine(c, tool)));
 
-// [“3 秒前检测”, “每 5 秒检测一次”]；还没检测过时是“正在检测”
+// [“3 秒前完成检测”, “每 5 秒检测一次”]；还没检测过时是“正在检测…”
 export function diagTiming(d) {
   const ago = d?.checked ? Math.max(0, Math.round((Date.now() - d.checked) / 1000)) : null;
-  return [ago == null ? '正在检测…' : `${ago < 2 ? '刚刚' : `${ago} 秒前`}完成检测`, `每 ${num(d?.every || 5)} 秒检测一次`];
+  // 检测周期是轮询间隔的整数倍，不一定是整数（--interval 1.1 时是 5.5 秒）：不是整数时留一位小数，不四舍五入成“每 6 秒”
+  const every = Math.round((d?.every || 5) * 10) / 10;
+  return [
+    ago == null ? tr('正在检测…') : tr('{ago}完成检测', { ago: ago < 2 ? tr('刚刚') : tr('{n} 秒前', { n: ago }) }),
+    tr('每 {n} 秒检测一次', { n: num(every, Number.isInteger(every) ? 0 : 1) }),
+  ];
 }
 
 // ---------- 看板上的检测情况 ----------
@@ -156,15 +162,15 @@ function diagList(supported = () => []) {
     render() {
       const d = diag.data;
       if (!d?.checked) {
-        const names = supported().join('、');
-        const text = [diag.error && !d ? `读不到检测情况（${diag.error}）。` : '正在检测…', names ? `目前能自动识别：${names}。` : ''];
+        const names = supported().join(tr('、'));
+        const text = [diag.error && !d ? tr('无法获取检测情况（{error}）。', { error: diag.error }) : tr('正在检测…'), names ? tr('当前可自动识别：{names}。', { names }) : ''];
         el.replaceChildren(h('p', { class: 'footnote', text: text.join('') }));
         return;
       }
-      const note = [...diagTiming(d), diag.error ? `刷新失败：${diag.error}` : null].filter(Boolean);
+      const note = [...diagTiming(d), diag.error ? tr('刷新失败：{error}', { error: diag.error }) : null].filter(Boolean);
       el.replaceChildren(
         h('ul', { class: 'diag-list' }, ...d.tools.map(diagItem)),
-        h('p', { class: 'footnote', text: `${note.join(' · ')}。${DIAG_SCOPE}` }),
+        h('p', { class: 'footnote', text: `${note.join(' · ')}${tr('。')}${DIAG_SCOPE}` }),
       );
     },
   };
@@ -175,7 +181,7 @@ export function diagToggle() {
   const list = diagList();
   list.el.hidden = true;
   list.el.id = 'diag-panel';
-  const btn = h('button', { class: 'more-btn diag-btn', type: 'button', 'aria-expanded': 'false', 'aria-controls': list.el.id }, chevron(), h('span', { text: '没看到某个工具？' }));
+  const btn = h('button', { class: 'more-btn diag-btn', type: 'button', 'aria-expanded': 'false', 'aria-controls': list.el.id }, chevron(), h('span', { text: tr('没看到某个工具？') }));
   btn.addEventListener('click', () => {
     const open = list.el.hidden;
     list.el.hidden = !open;
@@ -194,9 +200,9 @@ let emptyView = null;
 
 export function noRuntimesView(supported) {
   if (!emptyView) {
-    const c = card('模型服务', '', { wide: true });
+    const c = card(tr('模型服务'), '', { wide: true });
     const list = diagList(() => emptyView.supported || []);
-    c.body.append(h('p', { class: 'empty', text: '没有检测到正在运行的模型服务或命令行工具，启动后几秒内会出现在这里。下面是每个工具的检测情况：' }), list.el);
+    c.body.append(h('p', { class: 'empty', text: tr('未检测到正在运行的模型服务或命令行工具，启动后数秒内将在此展示。以下为各工具的检测情况：') }), list.el);
     emptyView = { el: c.el, list, supported };
     diagViews.add({ shown: () => isShown(c.el), render: list.render });
     list.render();

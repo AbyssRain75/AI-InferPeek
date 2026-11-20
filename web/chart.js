@@ -1,5 +1,7 @@
 // 轻量折线图（canvas），带十字线悬停、键盘查看和共享提示框。
 
+import { tr, locale } from './i18n.js';
+
 const FONT = '11px system-ui, -apple-system, "Segoe UI", "Microsoft YaHei UI", sans-serif';
 const PAD = { left: 44, right: 10, top: 8, bottom: 22 };
 
@@ -33,11 +35,13 @@ export function capacityScale(max, tickFormat, maxIntervals = 4) {
 }
 
 export function ago(sec) {
-  return sec >= 60 ? `${+(sec / 60).toFixed(1)} 分钟前` : `${Math.round(sec)} 秒前`;
+  // 取整到秒之后再分段，59.5～60 秒不会写成“60 秒前”
+  const s = Math.round(sec);
+  return s >= 60 ? tr('{n} 分钟前', { n: +(sec / 60).toFixed(1) }) : tr('{n} 秒前', { n: s });
 }
 
 export function clock(t) {
-  return new Date(t).toLocaleTimeString('zh-CN', { hour12: false });
+  return new Date(t).toLocaleTimeString(locale, { hour12: false });
 }
 
 let tipEl;
@@ -217,7 +221,7 @@ export class LineChart {
     ctx.textAlign = 'center';
     ctx.fillText(ago(sec / 2), PAD.left + pw / 2, h - 6);
     ctx.textAlign = 'right';
-    ctx.fillText('现在', w - PAD.right, h - 6);
+    ctx.fillText(tr('现在'), w - PAD.right, h - 6);
 
     // 按断档切分成若干段，每段画面积和折线
     const segments = [];
@@ -273,7 +277,9 @@ export class LineChart {
     const last = vis[vis.length - 1];
     this.canvas.setAttribute(
       'aria-label',
-      last ? `${this.label}，当前 ${this.format(last.v)}。获得焦点后用左右方向键查看历史数值` : `${this.label}，暂无数据`,
+      last
+        ? tr('{label}，当前 {value}。获得焦点后用左右方向键查看历史数值', { label: this.label, value: this.format(last.v) })
+        : tr('{label}，暂无数据', { label: this.label }),
     );
 
     // 悬停或键盘选中的点

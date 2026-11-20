@@ -3,8 +3,10 @@
 - 已加载的模型：/api/ps
 - 模型对应哪个 llama-server 进程：/api/show 里 FROM 的文件路径 = 进程的 --model 参数
 - 实时生成速度：每秒读 llama-server 的 /slots，用已生成 token 数的增量计算
-- 每次请求的统计（提示词速度、生成速度、token 数）：解析 server.log 里的计时行。
-  日志里还有提示词原文，这里只匹配计时相关的行，其余内容直接丢弃。
+- 上下文占用：/slots 里每一路（槽位）的 n_prompt_tokens 是这一路缓存里现在有多少 token（提示词加已生成的，
+  生成时一直在涨；请求结束后留着这段对话，下一轮接着用），n_ctx 是这一路的上下文大小
+- 每次请求的统计（提示词速度、生成速度、token 数、结束时占了多少上下文）：解析 server.log 里的计时行和
+  “new prompt”“stop processing”这两行。日志里还有提示词原文，这里只匹配这些行，其余内容直接丢弃。
 """
 
 import os
@@ -15,12 +17,16 @@ from datetime import datetime
 
 import psutil
 
+from ..i18n import N_, tr
 from .base import Adapter, HttpStatusError, prune, request_json
+from .jsonl import parse_ts
 
 SPEED_WINDOW = 3.0  # 秒，实时速度取最近这段时间的平均
 TASK_MEMORY = 120.0  # 秒，记住每个进程最近处理过的 task 编号，用来把日志记录对应到模型
 # 最多记住几个还没等到 total 行的请求。一次请求的三行计时是一起打出来的，缺了 total 行的（日志被截断、格式不同）不会再拼上
 PENDING_MAX = 32
+# 拼好的记录再记住几个，等后面紧跟着的 stop processing 行补上结束时的上下文占用
+RECENT_MAX = 8
 GEN_ENDPOINTS = ("/api/generate", "/api/chat", "/v1/chat/completions", "/v1/completions", "/v1/responses", "/v1/messages")
 
 
@@ -44,17 +50,11 @@ def _norm_path(path):
 
 
 def _parse_time(value):
-    """Ollama 的时间带 7 位小数和时区，截到微秒再解析；keep_alive=-1 时是很远的将来，返回 None。"""
-    m = re.match(r"(.+T\d\d:\d\d:\d\d)(\.\d+)?(.*)$", value or "")
-    if not m:
-        return None
-    tz = m.group(3) or ""
-    tz = "+00:00" if tz == "Z" else tz
-    try:
-        ts = datetime.fromisoformat(m.group(1) + (m.group(2) or "")[:7] + tz).timestamp()
-    except ValueError:
-        return None
-    return None if ts > time.time() + 10 * 365 * 86400 else ts * 1000
+    """/api/ps 的到期时间转成毫秒；解析不了、或 keep_alive=-1（到期时间是很远的将来）时返回 None。
+
+    Go 输出时间时去掉小数末尾的 0，位数不固定（Windows 上一般 7 位，也可能只剩 1、2 位），由 parse_ts 补齐或截到 6 位。"""
+    ts = parse_ts(value)
+    return None if ts is None or ts > (time.time() + 10 * 365 * 86400) * 1000 else ts
 
 
 def _arg(cmdline, *flags):
@@ -64,12 +64,28 @@ def _arg(cmdline, *flags):
     return None
 
 
+def _context(slots, pick=None):
+    """/slots 里的上下文占用：{context（已用 token）, context_window（这一路的上下文大小）, context_slots（并行几路）}。
+    从 pick 里（默认是全部）取占得最满的一路，生成时传正在处理的那几路；context_slots 始终是全部的路数。读不到时是空 dict。"""
+    best = None
+    for s in slots if pick is None else pick:
+        used, size = s.get("n_prompt_tokens"), s.get("n_ctx")
+        if isinstance(used, int) and isinstance(size, int) and size > 0 and (best is None or used / size > best[0] / best[1]):
+            best = (used, size)
+    if best is None:
+        return {}
+    return {"context": best[0], "context_window": best[1], "context_slots": len(slots)}
+
+
 class OllamaLog:
     """增量读取 server.log。每次打开读完就关，避免占着文件导致 Ollama 重启时无法轮换日志。"""
 
     PROMPT = re.compile(r"task (\d+) \| prompt eval time =\s*([\d.]+) ms /\s*(\d+) tokens")
     EVAL = re.compile(r"task (\d+) \|\s+eval time =\s*([\d.]+) ms /\s*(\d+) tokens")
     TOTAL = re.compile(r"task (\d+) \|\s+total time =\s*([\d.]+) ms /\s*(\d+) tokens")
+    # 请求开始时这一路的上下文大小；结束时缓存里有多少 token（旧版 llama-server 写的是 n_past），truncated 不是 0 表示上下文满了被截掉一部分
+    NEW_PROMPT = re.compile(r"task (\d+) \| new prompt, n_ctx_slot = (\d+)")
+    RELEASE = re.compile(r"task (\d+) \| stop processing: n_(?:tokens|past) = (\d+), truncated = (\d+)")
     GIN = re.compile(r'^\[GIN\] (\d{4}/\d\d/\d\d - \d\d:\d\d:\d\d) \|\s*(\d+) \|[^|]*\|[^|]*\|\s*(\w+)\s+"([^"]+)"')
     TEMPLATE = re.compile(r'msg="template selection" model=(\S+)')
     RUNNERS = re.compile(r'msg="loaded runners" count=(\d+)')
@@ -81,6 +97,7 @@ class OllamaLog:
         self.pos = 0
         self.rest = b""
         self.timing = {}  # task -> 正在拼的记录
+        self.recent = {}  # task -> 刚拼好的记录，等 stop processing 行补上 context
         self.untimed = []  # 历史部分里等待 [GIN] 行给出时间的记录
         self.last_model = None
         self.runner_count = None
@@ -98,6 +115,7 @@ class OllamaLog:
             start = max(0, st.st_size - self.backlog_bytes) if backlog else 0
             self.ident, self.pos, self.rest = ident, start, b""
             self.timing.clear()
+            self.recent.clear()
         if st.st_size == self.pos:
             return []
         try:
@@ -155,11 +173,25 @@ class OllamaLog:
                     "gen_tokens": g_n,
                     "gen_ms": g_ms,
                     "total_ms": float(m.group(2)),
+                    "context": None,  # 后面的 stop processing 行补上
+                    "context_window": parts.get("window"),
+                    "truncated": None,
                     "model_hint": self.last_model if self.runner_count == 1 else None,
                 }
                 if now is None:
                     self.untimed.append(rec)
+                while len(self.recent) >= RECENT_MAX:
+                    del self.recent[next(iter(self.recent))]
+                self.recent[task] = rec
                 return rec
+        elif line.startswith("slot "):
+            if m := self.NEW_PROMPT.search(line):
+                self._pending(int(m.group(1)))["window"] = int(m.group(2))
+            elif m := self.RELEASE.search(line):
+                # 记录已经交出去了（多半已经在页面的请求列表里），直接改它；下一秒的 poll() 带上
+                if rec := self.recent.pop(int(m.group(1)), None):
+                    rec["context"] = int(m.group(2))
+                    rec["truncated"] = m.group(3) != "0"
         elif line.startswith("[GIN]"):
             m = self.GIN.match(line)
             if m and self.untimed and m.group(4).split("?")[0] in GEN_ENDPOINTS:
@@ -180,7 +212,7 @@ class OllamaAdapter(Adapter):
     label = "Ollama"
     process_names = frozenset({"ollama.exe", "ollama"})
     default_ports = (11434,)
-    match_hint = "启动参数里要有 serve（Ollama 的服务进程）"
+    match_hint = N_("启动参数中需包含 serve（Ollama 的服务进程）")
     config_key = "ollama_log"
 
     def __init__(self, log_path=None):
@@ -248,11 +280,12 @@ class OllamaAdapter(Adapter):
         for t_id, seen in list(ls["tasks"].items()):
             if now - seen > TASK_MEMORY:
                 del ls["tasks"][t_id]
-        busy = [s for s in slots if isinstance(s, dict) and s.get("is_processing")]
+        slots = [s for s in slots if isinstance(s, dict)] if isinstance(slots, list) else []
+        busy = [s for s in slots if s.get("is_processing")]
         if not busy:
             ls["window"].clear()
             ls["busy"] = None
-            return {"state": "idle"}
+            return {"state": "idle", **_context(slots)}
 
         tasks = tuple(sorted(s.get("id_task", -1) for s in busy))
         for t_id in tasks:
@@ -272,7 +305,7 @@ class OllamaAdapter(Adapter):
         speed = None
         if len(w) >= 2 and w[-1][0] - w[0][0] >= 0.8 and w[-1][1] >= w[0][1]:
             speed = round((w[-1][1] - w[0][1]) / (w[-1][0] - w[0][0]), 2)
-        return {"state": "generating" if decoded else "prompt", "speed": speed, "n_decoded": decoded}
+        return {"state": "generating" if decoded else "prompt", "speed": speed, "n_decoded": decoded, **_context(slots, busy)}
 
     def poll(self, inst):
         now = time.time()
@@ -302,7 +335,10 @@ class OllamaAdapter(Adapter):
                 "size": size,
                 "size_vram": vram,
                 "gpu_ratio": round(vram / size, 4) if size else None,
-                "context": m.get("context_length"),
+                # 已用的读不到（远程、不是 llama-server 跑的模型）时只有上下文大小
+                "context": live.get("context"),
+                "context_window": live.get("context_window") or m.get("context_length"),
+                "context_slots": live.get("context_slots"),
                 "expires": _parse_time(m.get("expires_at")),
                 "pid": runner["pid"] if runner else None,
                 "state": live.get("state", "idle"),
@@ -324,7 +360,7 @@ class OllamaAdapter(Adapter):
                 continue
             known = next((short_name(n) for (n, _), (_, paths) in inst.state.get("paths", {}).items() if runner["path"] in paths), None)
             models.append({
-                "name": known or "（正在加载的模型）",
+                "name": known or tr("（正在加载的模型）"),
                 "pid": runner["pid"],
                 "state": "loading",
                 "speed": None,
@@ -356,11 +392,11 @@ class OllamaAdapter(Adapter):
         return [
             {
                 "key": r.get("model") or "request",
-                "name": r.get("model") or "一次请求",
+                "name": r.get("model") or tr("一次请求"),
                 "result": "ok",
                 "t": r["t"],
                 "duration": r.get("total_ms"),
-                "detail": f"生成 {r['gen_tokens']} tokens" if r.get("gen_tokens") else None,
+                "detail": tr("生成 {n} tokens", n=r["gen_tokens"]) if r.get("gen_tokens") else None,
             }
             for r in cur.get("requests") or []
             if r.get("t") and r["t"] > last

@@ -17,6 +17,7 @@ from urllib.parse import unquote
 
 import psutil
 
+from ..i18n import N_
 from .cli import LOST, CliAdapter, MAX_SESSIONS, RECENT, STALE, Rate, outcome, read_json, session, summarize, track, usage
 from .jsonl import JsonlTail, parse_ts
 
@@ -118,7 +119,7 @@ class GrokBuildAdapter(CliAdapter):
     kind = "grok-build"
     label = "Grok Build"
     process_names = frozenset({"grok.exe", "grok", "agent.exe", "agent"})
-    match_hint = "程序要在数据目录里，或者是 bin 文件夹里的 grok"
+    match_hint = N_("程序需位于数据目录中，或为 bin 文件夹中的 grok")
     config_key = "grok_dir"
 
     def __init__(self, home=None):

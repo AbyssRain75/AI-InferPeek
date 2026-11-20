@@ -18,6 +18,7 @@ import json
 import os
 import time
 
+from ..i18n import N_
 from . import sqlite
 from .base import prune
 from .cli import LOST, CliAdapter, MAX_SESSIONS, RECENT, STALE, Rate, newest_version, outcome, session, summarize, track, usage
@@ -31,7 +32,7 @@ DB_NAME = "openclaw-agent.sqlite"
 CHUNK = 2000  # 每次最多读这么多条会话记录，很长的会话分几轮读完，不卡住轮询
 # 回复的 stopReason：toolUse 是要调用工具，这一轮还没结束；没见过的值算完成
 STOPS = {"error": "failed", "aborted": "interrupted"}
-STOP_DETAIL = {"length": "回复超出长度上限"}
+STOP_DETAIL = {"length": N_("回复超出长度上限")}
 ROLES = ("user", "assistant", "toolResult")  # 看这几种消息判断状态；别的（插件插进来的消息等）不算
 WORKING_ROLES = ("user", "toolResult")  # 最后一条是这些时模型还没回复
 
@@ -101,8 +102,9 @@ class OpenclawSession:
         self.model = None
         self.rate = Rate()
         # 还没读完（很长的会话分几轮读）：读到一半时最后一条可能是用户消息，接着读到回复会被当成一轮刚结束，
-        # 所以读完之前不列出这个会话，也就不会误报完成
+        # 所以第一次读完之前不列出这个会话，也就不会误报完成；已经列出过的照样列上一轮的样子（shown），见 rows()
         self.behind = False
+        self.shown = None  # 上一轮列出的会话行，没列出时是 None；换了会话 id、从头读时也清掉，和第一次读一样
 
     def update(self, db, node):
         """读这个会话新追加的记录，返回是不是还没读完。"""
@@ -203,11 +205,16 @@ class OpenclawAgent:
     def rows(self, now):
         out = []
         for s in self.sessions.values():
-            if s.role is None or s.behind:
-                continue  # 还没有消息的、会话记录还没读完的不列
-            row = s.row(self.agent, now)
-            if row["status"] != "idle" or now - row["last"] < RECENT * 1000:
-                out.append(row)
+            if s.behind:
+                # 会话记录还没读完：第一次读的不列；已经列出过的（一下子追加了很多条）列上一轮的样子，
+                # 读完后和它比，中间结束的一轮照样提示，不会因为这几轮没列出、比不出变化而漏掉
+                if s.shown:
+                    out.append(s.shown)
+                continue
+            row = s.row(self.agent, now) if s.role is not None else None  # 还没有消息的不列
+            s.shown = row if row and (row["status"] != "idle" or now - row["last"] < RECENT * 1000) else None
+            if s.shown:
+                out.append(s.shown)
         return out
 
 
@@ -215,7 +222,7 @@ class OpenclawAdapter(CliAdapter):
     kind = "openclaw"
     label = "OpenClaw"
     process_names = frozenset({"openclaw.exe", "openclaw", "node.exe", "node"})
-    match_hint = "node 进程要在启动参数里带 openclaw"
+    match_hint = N_("node 进程的启动参数中需包含 openclaw")
     config_key = "openclaw_dir"
 
     def __init__(self, home=None):

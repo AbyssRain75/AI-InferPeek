@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>AI InferPeek</title>
     <link rel="stylesheet" href="style.css" />
+    <script src="api/i18n.js"></script>
     <script type="module" src="app.js"></script>
   </head>
   <body>
@@ -14,17 +15,27 @@
         <div class="machine" id="machine"></div>
       </div>
       <div class="topbar-actions">
-        <div class="status" id="status" role="status"><span class="dot"></span><span class="label">连接中…</span></div>
-        <button id="theme" class="btn" type="button">主题：跟随系统</button>
-        <a class="btn" href="settings.html" title="监控哪些工具、数据目录、手动添加的服务地址">设置</a>
+        <div class="update-box">
+          <span class="app-version" id="app-version"></span>
+          <button id="check-update" class="btn icon-only" type="button" title="检查更新" aria-label="检查更新" data-i18n-attr="title aria-label" hidden>
+            <svg class="update-icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+              <path d="M23 4v6h-6M20.49 15a9 9 0 1 1-2.12-9.36L23 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
+          <a id="new-version" class="update-badge" target="_blank" rel="noopener noreferrer" hidden></a>
+          <span id="update-msg" class="update-msg" role="status" aria-live="polite"></span>
+        </div>
+        <div class="status" id="status" role="status"><span class="dot"></span><span class="label" data-i18n>连接中…</span></div>
+        <button id="theme" class="btn" type="button"></button>
+        <a class="btn" href="settings.html" title="监控的工具、数据目录、手动添加的服务地址" data-i18n data-i18n-attr="title">设置</a>
       </div>
     </header>
     <div class="filters">
-      <span class="filter-label" id="range-label">时间范围</span>
+      <span class="filter-label" id="range-label" data-i18n>时间范围</span>
       <div class="seg" id="range" role="radiogroup" aria-labelledby="range-label">
-        <button type="button" role="radio" data-sec="60" aria-checked="true">1 分钟</button>
-        <button type="button" role="radio" data-sec="300" aria-checked="false">5 分钟</button>
-        <button type="button" role="radio" data-sec="600" aria-checked="false">10 分钟</button>
+        <button type="button" role="radio" data-sec="60" aria-checked="true" data-i18n>1 分钟</button>
+        <button type="button" role="radio" data-sec="300" aria-checked="false" data-i18n>5 分钟</button>
+        <button type="button" role="radio" data-sec="600" aria-checked="false" data-i18n>10 分钟</button>
       </div>
     </div>
     <main class="board" id="board"></main>

@@ -1,4 +1,5 @@
 {
+  "language": null,
   "device_name": null,
   "endpoints": [],
   "disabled_tools": [],
@@ -10,5 +11,7 @@
   "opencode_dir": null,
   "openclaw_dir": null,
   "antigravity_dir": null,
+  "cursor_dir": null,
+  "workbuddy_dir": null,
   "balance_warning": null
 }

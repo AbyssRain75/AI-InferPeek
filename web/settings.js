@@ -1,13 +1,16 @@
-// 设置页面：管理 aiinferpeek.json 里这台电脑的名字、监控哪些工具、各工具的数据目录（Ollama 是日志位置）和手动添加的服务地址。
+// 设置页面：管理 aiinferpeek.json 里的界面语言、这台电脑的名字、监控哪些工具、各工具的数据目录（Ollama 是日志位置）和手动添加的服务地址。
 // 每个工具旁边是后台的检测情况（/api/diagnostics，和看板上“没看到某个工具？”是同一份），每 5 秒刷新。
 // 保存时服务端校验、写文件、换上新配置并重新检测一次，返回新的检测情况，不用重启。
 // 最后一张卡片说明 CPU 温度要另外运行 LibreHardwareMonitor、怎么设置，并显示现在读没读到（/api/latest，也是每 5 秒刷新）
 
 import { h, store, card, icon, num } from './ui.js';
 import { diagLineEl, diagSummaryEl, diagMark, diagTiming, DIAG_STATE, DIAG_SCOPE, DIAG_REFRESH_MS } from './diagnostics.js';
+import { tr, lang, locale } from './i18n.js';
 
-const CATEGORY = { service: '模型服务', cli: '命令行工具' };
-const PATH_LABEL = { ollama_log: '日志文件位置' };
+const CATEGORY = { service: tr('模型服务'), cli: tr('命令行工具') };
+const PATH_LABEL = { ollama_log: tr('日志文件位置') };
+// 语言的名字用它自己的文字写，不翻译：看不懂当前语言的人也认得出
+const LANGUAGE_NAMES = { 'zh-CN': '简体中文', en: 'English' }; // i18n: 不翻译
 const URL_HINT = { ollama: 'http://192.168.1.20:11434', comfyui: 'http://192.168.1.20:8188' };
 // 官方仓库最新版的发布页：老版本用的驱动 WinRing0 会被杀毒软件报警，新版换成了 PawnIO
 const LHM_DOWNLOAD = 'https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/releases/latest';
@@ -47,6 +50,8 @@ const toolLabel = (kind) => state.data.tools.find((t) => t.kind === kind)?.label
 function toForm(config) {
   const endpoints = Array.isArray(config.endpoints) ? config.endpoints : [];
   return {
+    // 空的是跟随系统（文件里没写、null 或 auto）
+    language: config.language == null || config.language === 'auto' ? '' : String(config.language),
     deviceName: config.device_name == null ? '' : String(config.device_name),
     disabled: Array.isArray(config.disabled_tools) ? [...config.disabled_tools] : [],
     paths: Object.fromEntries(pathKeys().map((k) => [k, typeof config[k] === 'string' ? config[k] : ''])),
@@ -65,6 +70,7 @@ function toForm(config) {
 // 页面上的设置 → 发给服务端的 JSON：名字、路径留空是用默认的（null）
 function payload(form) {
   const out = {
+    language: form.language || null,
     device_name: form.deviceName.trim() || null,
     endpoints: form.endpoints.map((ep) => ({ ...ep, url: typeof ep.url === 'string' ? ep.url.trim() : ep.url })),
     disabled_tools: state.data.tools.map((t) => t.kind).filter((k) => form.disabled.includes(k)),
@@ -91,7 +97,7 @@ async function load() {
     data = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
   } catch (e) {
-    els.main.replaceChildren(h('p', { class: 'empty', text: `读不到设置：${e.message || e}` }));
+    els.main.replaceChildren(h('p', { class: 'empty', text: tr('无法获取设置：{error}', { error: e.message || e }) }));
     return;
   }
   state.data = data;
@@ -105,20 +111,22 @@ async function load() {
 async function save() {
   if (state.saving || !dirty()) return;
   state.saving = true;
-  state.message = { text: '正在保存并检测…', level: 'info' };
+  state.message = { text: tr('正在保存并检测…'), level: 'info' };
   updateBar();
+  // 保存要等新配置生效（一两秒），这期间输入框照样能改：记下发出去的，收到结果后比一比，改过的不能被覆盖
+  const sent = JSON.stringify(payload(state.form));
   let r;
   let body;
   try {
     r = await fetch('/api/config', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ version: state.data.version, config: payload(state.form) }),
+      body: JSON.stringify({ version: state.data.version, config: JSON.parse(sent) }),
     });
     body = await r.json().catch(() => ({}));
   } catch (e) {
     state.saving = false;
-    state.message = { text: `保存失败：连不上看板服务（${e.message || e}）`, level: 'error' };
+    state.message = { text: tr('保存失败：无法连接看板服务（{error}）', { error: e.message || e }), level: 'error' };
     updateBar();
     return;
   }
@@ -130,17 +138,40 @@ async function save() {
       state.diag = body.diagnostics;
       state.diagError = null;
     }
-    const time = new Date().toLocaleTimeString('zh-CN', { hour12: false });
-    state.message = { text: body.applied ? `设置已保存并生效 · ${time}` : `设置已保存，正在生效… · ${time}`, level: 'ok' };
-    build(body.config);
+    // 先把“已保存”的基线换成刚存进文件的：下面重新加载时 beforeunload 不会再当成有没保存的修改来拦
+    const edited = JSON.stringify(payload(state.form)) !== sent;
+    state.saved = toForm(body.config);
+    state.data.config = body.config;
+    const switching = languageOf(body.config) !== lang;
+    const time = new Date().toLocaleTimeString(locale, { hour12: false });
+    const text = body.applied ? tr('设置已保存并生效 · {time}', { time }) : tr('设置已保存，正在生效… · {time}', { time });
+    if (!edited) {
+      state.message = { text, level: 'ok' };
+      build(body.config);
+    } else {
+      // 保存期间改过：页面上改的留着（不重建），提示这部分还没保存
+      const notes = [text, tr('保存期间修改的内容尚未保存'), switching ? tr('刷新页面后切换为新的界面语言') : null];
+      state.message = { text: notes.filter(Boolean).join(tr('；')), level: 'ok' };
+      renderFileCard();
+      renderProblems();
+      renderDiag();
+      updateBar();
+    }
+    // 换了界面语言：重新加载，整个页面换成新的语言（看板和悬浮窗看到样本里的语言变了也会自己重新加载）。
+    // 还有没保存的修改时浏览器会先问要不要离开，所以保存栏要在这之前就换成保存完的样子：
+    // 选了留下时页面不会重新加载，也不会再走到别的地方去更新它，保存、撤销按钮得已经能用
+    if (switching) location.reload();
     return;
   }
   // 写错的项（400）放到对应输入框旁边；文件被改过（409）可以重新载入；写不进去（500）、被拒绝（403）说明原因
   state.problems = new Map((body.problems || []).map((p) => [p.field, p.message]));
-  state.message = { text: body.error || `保存失败（HTTP ${r.status}）`, level: 'error', reload: r.status === 409 };
+  state.message = { text: body.error || tr('保存失败（HTTP {status}）', { status: r.status }), level: 'error', reload: r.status === 409 };
   renderProblems();
   updateBar();
 }
+
+// 配置里的 language 实际用哪种语言：没写、auto（或写错了）时跟随系统
+const languageOf = (config) => (config.language in LANGUAGE_NAMES ? config.language : state.data.system_language || 'zh-CN');
 
 function revert() {
   state.problems.clear();
@@ -174,12 +205,12 @@ function renderDiag() {
     let lines = [];
     if (savedOff.has(kind)) {
       status = 'off';
-      text = formOff.has(kind) ? '已停用（不检测且不轮询）' : '已停用 · 保存后启用监控';
+      text = formOff.has(kind) ? tr('已停用（不检测且不轮询）') : tr('已停用 · 保存后启用监控');
     } else if (!tool) {
-      text = state.diagError ? `读不到检测情况（${state.diagError}）` : '正在检测…';
+      text = state.diagError ? tr('无法获取检测情况（{error}）', { error: state.diagError }) : tr('正在检测…');
     } else {
       status = tool.status;
-      text = (DIAG_STATE[tool.status] || tool.status) + (formOff.has(kind) ? ' · 保存后停用监控' : '');
+      text = (DIAG_STATE[tool.status] || tool.status) + (formOff.has(kind) ? ` · ${tr('保存后停用监控')}` : '');
       // 数据目录的情况写在输入框下面，这里不重复；其余的和看板上“没看到某个工具？”的写法一样
       lines = tool.checks.filter((c) => !(c.code === 'missing_path' && v.tool.key && c.key === v.tool.key)).map((c) => diagLineEl(c, tool));
     }
@@ -200,7 +231,7 @@ function renderPathState(v, tool, off) {
   let content = [];
   let level = 'info';
   if (state.form.paths[key].trim() !== value) {
-    content = [h('span', { text: '保存后将检测此路径' })];
+    content = [h('span', { text: tr('保存后将检测此路径') })];
   } else if (!off && tool) {
     const miss = tool.checks.find((c) => c.code === 'missing_path' && c.key === key);
     if (miss) {
@@ -209,7 +240,7 @@ function renderPathState(v, tool, off) {
     } else if (tool.category === 'cli' || tool.status === 'ok') {
       // 模型服务没在本机运行时后台不看日志，说不上找没找到
       level = 'ok';
-      content = [icon('done'), h('span', {}, '已定位：', h('span', { class: 'diag-path', text: value || v.tool.default || '' }))];
+      content = [icon('done'), h('span', {}, tr('已定位：'), h('span', { class: 'diag-path', text: value || v.tool.default || '' }))];
     }
   }
   v.pathState.dataset.level = level;
@@ -224,13 +255,15 @@ function renderEndpointStates() {
   for (const r of view.endpointRows) {
     const { ep } = r;
     let content;
-    if (!saved.has(`${ep.kind} ${normUrl(ep.url)}`)) content = [h('span', { text: '保存后进行连接检测' })];
-    else if (savedOff.has(ep.kind)) content = [h('span', { text: `${toolLabel(ep.kind)} 已停用，跳过连接此地址` })];
+    if (!saved.has(`${ep.kind} ${normUrl(ep.url)}`)) content = [h('span', { text: tr('保存后进行连接检测') })];
+    else if (savedOff.has(ep.kind)) content = [h('span', { text: tr('{tool} 已停用，跳过连接此地址', { tool: toolLabel(ep.kind) }) })];
     else {
       const tool = state.diag?.tools?.find((t) => t.kind === ep.kind);
-      const c = tool?.checks.find((x) => x.url && normUrl(x.url) === normUrl(ep.url));
-      if (!c) content = [h('span', { text: '正在检测…' })];
-      else if (c.code === 'found') content = [icon('done'), h('span', { text: c.configured ? '已连上' : `已连上（和本机自动发现的是同一个服务，进程 ${c.pid}）` })];
+      // 指的是本机发现的服务时（写法可能不同，比如 localhost），后台记在那个服务的 endpoints 里
+      const same = (u) => normUrl(u) === normUrl(ep.url);
+      const c = tool?.checks.find((x) => x.url && (same(x.url) || (x.endpoints || []).some(same)));
+      if (!c) content = [h('span', { text: tr('正在检测…') })];
+      else if (c.code === 'found') content = [icon('done'), h('span', { text: c.configured ? tr('已连接') : tr('已连接（与本机自动发现的为同一服务，进程 {pid}）', { pid: c.pid }) })];
       else content = [icon('warning'), diagSummaryEl(c, tool)];
     }
     r.stateEl.replaceChildren(...content);
@@ -254,11 +287,11 @@ function renderCpuTemp() {
   if (!view) return;
   const cpu = state.latest?.cpu;
   let content;
-  if (state.latestError) content = [icon('warning'), h('span', { text: `获取当前状态失败（${state.latestError}）` })];
-  else if (!state.latest) content = [h('span', { text: '正在检测…' })];
-  else if (!cpu) content = [icon('warning'), h('span', { text: '未采集到本次 CPU 监控数据' })];
-  else if (cpu.temp != null) content = [icon('done'), h('span', { text: `已连接 LibreHardwareMonitor，CPU 当前温度 ${num(cpu.temp)}°C` })];
-  else content = [icon('warning'), h('span', { text: cpu.temp_note || '暂未获取到 CPU 温度' })];
+  if (state.latestError) content = [icon('warning'), h('span', { text: tr('获取当前状态失败（{error}）', { error: state.latestError }) })];
+  else if (!state.latest) content = [h('span', { text: tr('正在检测…') })];
+  else if (!cpu) content = [icon('warning'), h('span', { text: tr('未采集到本次 CPU 监控数据') })];
+  else if (cpu.temp != null) content = [icon('done'), h('span', { text: tr('已连接 LibreHardwareMonitor，CPU 当前温度 {v}°C', { v: num(cpu.temp) }) })];
+  else content = [icon('warning'), h('span', { text: cpu.temp_note || tr('暂未获取到 CPU 温度') })];
   view.cpuTempState.replaceChildren(...content);
 }
 
@@ -277,7 +310,7 @@ function changed(...fields) {
   for (const f of fields) {
     for (const key of [...state.problems.keys()]) if (key === f || key.startsWith(`${f}[`)) state.problems.delete(key);
   }
-  state.message = null;
+  if (!state.saving) state.message = null; // 保存中改的：“正在保存并检测…”留着，结果回来后再说
   renderProblems();
   renderDiag();
   updateBar();
@@ -285,7 +318,7 @@ function changed(...fields) {
 
 function toolRow(t) {
   const id = `tool-${t.kind}`;
-  const input = h('input', { type: 'checkbox', role: 'switch', id, 'aria-label': `监控 ${t.label}` });
+  const input = h('input', { type: 'checkbox', role: 'switch', id, 'aria-label': tr('监控 {tool}', { tool: t.label }) });
   input.checked = !state.form.disabled.includes(t.kind);
   input.addEventListener('change', () => {
     const off = new Set(state.form.disabled);
@@ -314,7 +347,7 @@ function toolRow(t) {
       class: 'text-input',
       id: pid,
       'data-field': t.key,
-      placeholder: t.default ? `默认：${t.default}` : '默认位置',
+      placeholder: t.default ? tr('默认：{path}', { path: t.default }) : tr('默认位置'),
       spellcheck: 'false',
       autocomplete: 'off',
       'aria-describedby': `${pid}-error`,
@@ -329,7 +362,12 @@ function toolRow(t) {
       h(
         'div',
         { class: 'field' },
-        h('label', { class: 'field-label', for: pid }, PATH_LABEL[t.key] || '数据目录', h('span', { class: 'field-key', text: ` · aiinferpeek.json 的 ${t.key}，留空用默认位置` })),
+        h(
+          'label',
+          { class: 'field-label', for: pid },
+          PATH_LABEL[t.key] || tr('数据目录'),
+          h('span', { class: 'field-key', text: ` · ${tr('aiinferpeek.json 的 {key}，留空表示使用默认位置', { key: t.key })}` }),
+        ),
         v.pathInput,
         errorEl(t.key, `${pid}-error`),
         v.pathState,
@@ -337,7 +375,7 @@ function toolRow(t) {
     );
   }
   if (t.balance) main.append(balanceField(t));
-  v.row = h('li', { class: 'tool-row' }, h('label', { class: 'switch', title: `监控 ${t.label}` }, input, h('span', { class: 'switch-ui', 'aria-hidden': 'true' })), main);
+  v.row = h('li', { class: 'tool-row' }, h('label', { class: 'switch', title: tr('监控 {tool}', { tool: t.label }) }, input, h('span', { class: 'switch-ui', 'aria-hidden': 'true' })), main);
   view.tools.set(t.kind, v);
   return v.row;
 }
@@ -352,7 +390,7 @@ function balanceField(t) {
     id,
     inputmode: 'decimal',
     'data-field': field,
-    placeholder: '不提醒',
+    placeholder: tr('不提醒'),
     spellcheck: 'false',
     autocomplete: 'off',
     'aria-describedby': `${id}-error ${id}-note`,
@@ -365,13 +403,20 @@ function balanceField(t) {
   return h(
     'div',
     { class: 'field' },
-    h('label', { class: 'field-label', for: id }, '余额预警', h('span', { class: 'field-key', text: ` · aiinferpeek.json 的 ${field}，余额低于此阈值时提醒，留空表示不提醒` })),
+    h(
+      'label',
+      { class: 'field-label', for: id },
+      tr('余额预警'),
+      h('span', { class: 'field-key', text: ` · ${tr('aiinferpeek.json 的 {key}，余额低于此阈值时提醒，留空表示不提醒', { key: field })}` }),
+    ),
     input,
     errorEl(field, `${id}-error`),
     h('p', {
       class: 'path-state',
       id: `${id}-note`,
-      text: '预警币种与账户一致（如人民币单位为“元”）。余额数据读取自 DeepSeek Harness 的“余额小鲸鱼”插件（dsh-whale-widget）生成的本地账本，未安装该插件时无法展示余额。',
+      text: tr(
+        '预警币种与账户一致（如人民币单位为“元”）。余额数据读取自 DeepSeek Harness 的“余额小鲸鱼”插件（dsh-whale-widget）生成的本地账本，未安装该插件时无法展示余额。',
+      ),
     }),
   );
 }
@@ -379,8 +424,8 @@ function balanceField(t) {
 function endpointRow(ep, i) {
   const f = `endpoints[${i}]`;
   const kinds = state.data.service_kinds;
-  const select = h('select', { class: 'select-input', 'data-field': `${f}.kind`, 'aria-label': `第 ${i + 1} 个地址的服务类型` });
-  if (!kinds.includes(ep.kind)) select.append(h('option', { value: ep.kind ?? '', text: ep.kind ? `${ep.kind}（不认识）` : '选择类型' }));
+  const select = h('select', { class: 'select-input', 'data-field': `${f}.kind`, 'aria-label': tr('第 {n} 个地址的服务类型', { n: i + 1 }) });
+  if (!kinds.includes(ep.kind)) select.append(h('option', { value: ep.kind ?? '', text: ep.kind ? tr('{kind}（无法识别）', { kind: ep.kind }) : tr('选择类型') }));
   select.append(...kinds.map((k) => h('option', { value: k, text: toolLabel(k) })));
   select.value = ep.kind ?? '';
   const url = h('input', {
@@ -391,7 +436,7 @@ function endpointRow(ep, i) {
     autocomplete: 'off',
     'data-field': `${f}.url`,
     placeholder: URL_HINT[ep.kind] || 'http://',
-    'aria-label': `第 ${i + 1} 个地址`,
+    'aria-label': tr('第 {n} 个地址', { n: i + 1 }),
     'aria-describedby': `${f}-url-error`,
   });
   url.value = typeof ep.url === 'string' ? ep.url : String(ep.url ?? '');
@@ -404,7 +449,7 @@ function endpointRow(ep, i) {
     ep.url = url.value;
     changed(`${f}.url`);
   });
-  const del = h('button', { class: 'btn', type: 'button', 'aria-label': `删除第 ${i + 1} 个地址` }, '删除');
+  const del = h('button', { class: 'btn', type: 'button', 'aria-label': tr('删除第 {n} 个地址', { n: i + 1 }) }, tr('删除'));
   del.addEventListener('click', () => {
     state.form.endpoints.splice(i, 1);
     // 后面的地址序号变了，旧的错误提示对不上，一起清掉
@@ -430,20 +475,48 @@ function renderEndpoints() {
   view.endpointList.replaceChildren(
     ...(view.endpointRows.length
       ? view.endpointRows.map((r) => r.el)
-      : [h('p', { class: 'footnote', text: '暂无手动添加的服务地址。' })]),
+      : [h('p', { class: 'footnote', text: tr('暂无手动添加的服务地址。') })]),
   );
   if (state.data.readonly) for (const x of view.endpointList.querySelectorAll('input, select, button')) x.disabled = true;
 }
 
+// 界面语言：看板、悬浮窗、设置页面和托盘菜单一起换。标题一直带着英文，看不懂中文的人也找得到
+function languageCard() {
+  const c = card(tr('界面语言 / Language'), tr('看板、悬浮窗、设置页面和托盘菜单使用的语言'));
+  const select = h('select', { class: 'select-input', id: 'language', 'data-field': 'language', 'aria-describedby': 'language-error' });
+  const system = LANGUAGE_NAMES[state.data.system_language] || state.data.system_language || '';
+  select.append(
+    h('option', { value: '', text: tr('跟随系统（{name}）', { name: system }) }),
+    ...Object.entries(LANGUAGE_NAMES).map(([value, text]) => h('option', { value, text })),
+  );
+  // 文件里手动写了不认识的值：先照样显示出来，保存时由服务端指出
+  if (state.form.language && !(state.form.language in LANGUAGE_NAMES)) select.append(h('option', { value: state.form.language, text: state.form.language }));
+  select.value = state.form.language;
+  select.addEventListener('change', () => {
+    state.form.language = select.value;
+    changed('language');
+  });
+  c.body.append(
+    h(
+      'div',
+      { class: 'field device-field' },
+      h('label', { class: 'field-label', for: 'language' }, tr('语言'), h('span', { class: 'field-key', text: ` · ${tr('aiinferpeek.json 的 language，保存后页面将重新加载')}` })),
+      select,
+      errorEl('language', 'language-error'),
+    ),
+  );
+  return c;
+}
+
 // 这台电脑的名字：看板标题、浏览器标签、悬浮窗标题、托盘提示用它，留空用计算机名
 function deviceCard() {
-  const c = card('设备名称', '自定义当前设备的显示名称，将同步展示在看板标题、浏览器标签页、悬浮窗及系统托盘中');
+  const c = card(tr('设备名称'), tr('自定义当前设备的显示名称，将同步展示在看板标题、浏览器标签页、悬浮窗及系统托盘中'));
   const input = h('input', {
     type: 'text',
     class: 'text-input',
     id: 'device-name',
     'data-field': 'device_name',
-    placeholder: `计算机名：${state.data.host || ''}`,
+    placeholder: tr('计算机名：{name}', { name: state.data.host || '' }),
     spellcheck: 'false',
     autocomplete: 'off',
     'aria-describedby': 'device-name-error',
@@ -460,8 +533,8 @@ function deviceCard() {
       h(
         'label',
         { class: 'field-label', for: 'device-name' },
-        '设备显示名称',
-        h('span', { class: 'field-key', text: ` · aiinferpeek.json 的 device_name，最多 ${state.data.device_name_max || 32} 个字，留空用计算机名` }),
+        tr('设备显示名称'),
+        h('span', { class: 'field-key', text: ` · ${tr('aiinferpeek.json 的 device_name，最多 {n} 个字，留空表示使用计算机名', { n: state.data.device_name_max || 32 })}` }),
       ),
       input,
       errorEl('device_name', 'device-name-error'),
@@ -473,20 +546,25 @@ function deviceCard() {
 // CPU 温度：不是配置文件里的设置，只说明怎么开 LibreHardwareMonitor。
 // 下载按钮是新窗口打开的链接：桌面版的窗口会把它交给系统默认浏览器，不在程序里打开
 function cpuTempCard() {
-  const c = card('CPU 温度', 'Windows 系统未开放普通应用程序的 CPU 核心温度读取接口，需配合运行 LibreHardwareMonitor（免费开源硬件监控工具）获取实时读数');
+  const c = card(tr('CPU 温度'), tr('Windows 系统未开放普通应用程序的 CPU 核心温度读取接口，需配合运行 LibreHardwareMonitor（免费开源硬件监控工具）获取实时读数'));
   view.cpuTempState = h('p', { class: 'path-state cpu-temp-state' });
-  const download = h('a', { class: 'btn', href: LHM_DOWNLOAD, target: '_blank', rel: 'noopener noreferrer', title: LHM_DOWNLOAD }, '下载 LibreHardwareMonitor');
+  const download = h('a', { class: 'btn', href: LHM_DOWNLOAD, target: '_blank', rel: 'noopener noreferrer', title: LHM_DOWNLOAD }, tr('下载 LibreHardwareMonitor'));
   c.body.append(
     view.cpuTempState,
     h(
       'ol',
       { class: 'setup-steps' },
-      h('li', {}, h('span', { text: '前往其 GitHub 官方 Releases 页面下载最新版本并解压。' }), download),
-      h('li', { text: '右键点击 LibreHardwareMonitor.exe，选择“以管理员身份运行”（读取硬件底层传感器驱动必须）。' }),
-      h('li', { text: '在菜单栏勾选 Options → Remote Web Server → Run（保持默认端口 8085，且不勾选 Authentication 密码认证）。' }),
-      h('li', { text: '安全建议：在 Options → Remote Web Server → Interface / Port 中将监听网卡选为 127.0.0.1（仅允许本机回环访问，防止局域网内其他设备读取本机硬件读数）。' }),
+      h('li', {}, h('span', { text: tr('前往其 GitHub 官方 Releases 页面下载最新版本并解压。') }), download),
+      h('li', { text: tr('右键点击 LibreHardwareMonitor.exe，选择“以管理员身份运行”（加载硬件传感器驱动需要管理员权限）。') }),
+      h('li', { text: tr('在菜单栏勾选 Options → Remote Web Server → Run（保持默认端口 8085，且不勾选 Authentication 密码认证）。') }),
+      h('li', {
+        text: tr('安全建议：在 Options → Remote Web Server → Interface / Port 中将监听网卡选为 127.0.0.1（仅允许本机回环访问，防止局域网内其他设备读取本机硬件读数）。'),
+      }),
     ),
-    h('p', { class: 'footnote', text: '服务启动数秒内看板与悬浮窗将自动识别并显示 CPU 温度，无需重启本软件。如需开机常驻，请在其 Options 中勾选 Run On Windows Startup 与 Start Minimized。' }),
+    h('p', {
+      class: 'footnote',
+      text: tr('服务启动数秒内看板与悬浮窗将自动识别并显示 CPU 温度，无需重启本软件。如需开机常驻，请在其 Options 中勾选 Run On Windows Startup 与 Start Minimized。'),
+    }),
   );
   return c;
 }
@@ -498,12 +576,12 @@ function renderFileCard() {
       'p',
       { class: 'file-path' },
       h('span', { class: 'diag-path', text: d.path }),
-      d.exists ? null : h('span', { class: 'diag-detail', text: ' · 还没有这个文件，保存时创建' }),
+      d.exists ? null : h('span', { class: 'diag-detail', text: ` · ${tr('文件尚不存在，保存时创建')}` }),
     ),
     d.readonly ? notice(d.readonly, 'warning') : null,
     d.error ? notice(d.error, 'error') : null,
-    d.extra?.length ? h('p', { class: 'footnote', text: `文件里还有这些设置页面不管的项，保存时原样保留：${d.extra.join('、')}` }) : null,
-    h('p', { class: 'footnote', text: '配置保存后即刻生效，无需重启软件。' }),
+    d.extra?.length ? h('p', { class: 'footnote', text: tr('文件中还有以下不由设置页面管理的项，保存时原样保留：{keys}', { keys: d.extra.join(tr('、')) }) }) : null,
+    h('p', { class: 'footnote', text: tr('配置保存后即刻生效，无需重启软件。') }),
   ];
   view.fileCard.body.replaceChildren(...parts.filter(Boolean));
 }
@@ -520,7 +598,7 @@ function renderProblems() {
   for (const [field, message] of state.problems) {
     if (placed.has(field)) continue;
     const el = els.main.querySelector(`[data-error="${field.split(/[[.]/)[0]}"]`);
-    if (field && el) el.textContent += (el.textContent ? '；' : '') + message;
+    if (field && el) el.textContent += (el.textContent ? tr('；') : '') + message;
     else view.rest.push(message);
   }
 }
@@ -531,14 +609,14 @@ function updateBar() {
   els.save.disabled = Boolean(d.readonly || d.error) || state.saving || !isDirty;
   els.revert.disabled = Boolean(d.readonly) || state.saving || !isDirty;
   reportUnsaved(isDirty);
-  const msg = state.message || (view.rest?.length ? { text: view.rest.join('；'), level: 'error' } : isDirty ? { text: '有未保存的修改', level: 'info' } : null);
+  const msg = state.message || (view.rest?.length ? { text: view.rest.join(tr('；')), level: 'error' } : isDirty ? { text: tr('有未保存的修改'), level: 'info' } : null);
   els.msg.dataset.level = msg?.level || '';
   els.msg.replaceChildren();
   if (!msg) return;
   if (msg.level !== 'info') els.msg.append(icon(msg.level === 'ok' ? 'done' : 'critical'));
   els.msg.append(h('span', { text: msg.text }));
   if (msg.reload) {
-    const btn = h('button', { class: 'btn', type: 'button' }, '重新载入（放弃当前修改）');
+    const btn = h('button', { class: 'btn', type: 'button' }, tr('重新载入（放弃当前修改）'));
     btn.addEventListener('click', load);
     els.msg.append(btn);
   }
@@ -560,16 +638,16 @@ function build(config) {
   state.data.config = config;
   view = { tools: new Map(), endpointRows: [], rest: [] };
 
-  view.fileCard = card('配置文件', '');
+  view.fileCard = card(tr('配置文件'), '');
   renderFileCard();
 
-  const tools = card('监控的工具', '停用的工具将停止发现与轮询，且不在看板中显示');
+  const tools = card(tr('监控的工具'), tr('停用的工具将停止发现与轮询，且不在看板中显示'));
   view.diagNote = h('p', { class: 'footnote' });
   tools.body.append(errorEl('disabled_tools'), h('ul', { class: 'tool-list' }, ...state.data.tools.map(toolRow)), view.diagNote);
 
-  const eps = card('手动添加的服务地址', '本机运行的服务将自动发现；此处可添加局域网远程服务或无法自动探测的地址');
+  const eps = card(tr('手动添加的服务地址'), tr('本机运行的服务将自动发现；此处可添加局域网远程服务或无法自动探测的地址'));
   view.endpointList = h('div', { class: 'endpoint-list' });
-  const add = h('button', { class: 'btn', type: 'button' }, '添加地址');
+  const add = h('button', { class: 'btn', type: 'button' }, tr('添加地址'));
   add.addEventListener('click', () => {
     state.form.endpoints.push({ kind: state.data.service_kinds[0], url: '' });
     renderEndpoints();
@@ -580,10 +658,10 @@ function build(config) {
     errorEl('endpoints'),
     view.endpointList,
     h('div', { class: 'endpoint-actions' }, add),
-    h('p', { class: 'footnote', text: '仅可获取 API 接口数据，无法采集远程设备的系统资源。所属工具停用时不会发起连接。' }),
+    h('p', { class: 'footnote', text: tr('仅可获取 API 接口数据，无法采集远程设备的系统资源。所属工具停用时不会发起连接。') }),
   );
 
-  els.main.replaceChildren(view.fileCard.el, deviceCard().el, tools.el, eps.el, cpuTempCard().el);
+  els.main.replaceChildren(view.fileCard.el, languageCard().el, deviceCard().el, tools.el, eps.el, cpuTempCard().el);
   renderEndpoints();
   if (state.data.readonly) for (const x of els.main.querySelectorAll('input, select, button')) x.disabled = true;
   els.bar.hidden = false;

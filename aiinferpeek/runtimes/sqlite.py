@@ -1,4 +1,4 @@
-"""只读打开别的程序的 SQLite 数据库（opencode、OpenClaw、Antigravity 的会话库）。
+"""只读打开别的程序的 SQLite 数据库（opencode、OpenClaw、Antigravity 的会话库，Cursor 的状态库）。
 
 库里有对话原文。查询时用 json_extract 只取标题、状态、模型和 token 用量这些字段，消息内容不取出来。
 用 mode=ro 打开，不会写入；每次查完就关，不一直占着读事务（WAL 模式下长时间不结束的读事务会让对方的日志越积越大）。

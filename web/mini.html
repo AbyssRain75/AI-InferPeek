@@ -3,17 +3,18 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>AI InferPeek 悬浮窗</title>
+    <title data-i18n>AI InferPeek 悬浮窗</title>
     <link rel="stylesheet" href="style.css" />
     <link rel="stylesheet" href="mini.css" />
+    <script src="api/i18n.js"></script>
     <script type="module" src="mini.js"></script>
   </head>
   <body class="mini">
     <header class="mini-head pywebview-drag-region">
       <span class="mini-brand" id="brand">AI InferPeek</span>
-      <span class="status" id="status" role="status"><span class="dot"></span><span class="label">连接中…</span></span>
+      <span class="status" id="status" role="status"><span class="dot"></span><span class="label" data-i18n>连接中…</span></span>
       <span class="mini-actions">
-        <button type="button" id="compact" class="icon-btn" title="小窗模式：只显示数字" aria-label="切换小窗模式" aria-pressed="false">
+        <button type="button" id="compact" class="icon-btn" aria-label="切换小窗模式" data-i18n-attr="aria-label" aria-pressed="false">
           <svg class="to-compact" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
             <path d="M6 2.5V6H2.5M10 2.5V6h3.5M6 13.5V10H2.5M10 13.5V10h3.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
           </svg>
@@ -21,12 +22,12 @@
             <path d="M2.5 6V2.5H6M13.5 6V2.5H10M2.5 10v3.5H6M13.5 10v3.5H10" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
           </svg>
         </button>
-        <button type="button" id="open" class="icon-btn" title="打开完整看板" aria-label="打开完整看板">
+        <button type="button" id="open" class="icon-btn" title="打开完整看板" aria-label="打开完整看板" data-i18n-attr="title aria-label">
           <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
             <path d="M9 2.5h4.5V7M13.5 2.5 7.5 8.5M12 9.5v3.5a.5.5 0 0 1-.5.5h-8a.5.5 0 0 1-.5-.5v-8a.5.5 0 0 1 .5-.5H7" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
           </svg>
         </button>
-        <button type="button" id="hide" class="icon-btn" title="隐藏悬浮窗（点托盘图标可重新显示）" aria-label="隐藏悬浮窗">
+        <button type="button" id="hide" class="icon-btn" title="隐藏悬浮窗（点击托盘图标恢复显示）" aria-label="隐藏悬浮窗" data-i18n-attr="title aria-label">
           <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
             <path d="M3.5 8h9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
           </svg>

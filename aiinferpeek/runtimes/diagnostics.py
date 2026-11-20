@@ -7,6 +7,8 @@ manager 每次发现后用 collect() 按工具整理一份；页面来取时用 
 import os
 import time
 
+from ..i18n import tr
+
 
 def _shown_names(adapter):
     # Windows 上只列 .exe 的进程名，其他系统只列不带 .exe 的
@@ -66,6 +68,8 @@ def collect(adapters, instances, waiting, find_errors, every):
                     "configured": inst.configured,
                     "pid": inst.main_pid,
                     "processes": len(inst.roots),
+                    # 手动添加的地址里指的就是这个本机服务的（写法可能不同），设置页面按它说明“与本机自动发现的为同一服务”
+                    **({"endpoints": list(inst.endpoints)} if inst.endpoints else {}),
                 })
             else:
                 checks.append(waiting.get(inst.main_pid) or {"code": "probing", "level": "info", "pid": inst.main_pid, "addrs": []})
@@ -73,7 +77,7 @@ def collect(adapters, instances, waiting, find_errors, every):
         if adapter.kind in find_errors:
             checks.append({"code": "find_error", "level": "warning", "error": find_errors[adapter.kind]})
         elif not running:
-            checks.append({"code": "no_process", "level": "info", "names": _shown_names(adapter), "hint": adapter.match_hint})
+            checks.append({"code": "no_process", "level": "info", "names": _shown_names(adapter), "hint": tr(adapter.match_hint) if adapter.match_hint else ""})
         # 模型服务没在本机运行时不看日志；命令行工具的数据目录不对时连进程都可能找不到（Claude Code 按登记找），总是看
         if running or adapter.category == "cli":
             checks += _check_paths(adapter, running)

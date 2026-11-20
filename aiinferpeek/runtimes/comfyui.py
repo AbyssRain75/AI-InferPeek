@@ -12,6 +12,7 @@ import time
 
 import psutil
 
+from ..i18n import N_, tr
 from .base import Adapter, HttpStatusError, prune, request_json
 
 STATS_EVERY = 5.0
@@ -104,7 +105,7 @@ class ComfyUIAdapter(Adapter):
     label = "ComfyUI"
     process_names = frozenset({"python.exe", "pythonw.exe", "python", "python3"})
     default_ports = (8188, 8000)
-    match_hint = "启动参数里要有 main.py，并且启动参数或启动目录带 comfy 字样（ComfyUI 的目录名）"
+    match_hint = N_("启动参数中需包含 main.py，且启动参数或启动目录含有 comfy 字样（ComfyUI 的目录名）")
 
     def match_process(self, name, cmdline):
         if name.lower() not in self.process_names:
@@ -237,7 +238,7 @@ class ComfyUIAdapter(Adapter):
         return [
             {
                 "key": "job",
-                "name": f"任务 {str(j['id'])[:8]}",
+                "name": tr("任务 {id}", id=str(j["id"])[:8]),
                 "result": RESULTS[j["status"]],
                 "t": j["end"] or now,
                 "duration": j["duration"],

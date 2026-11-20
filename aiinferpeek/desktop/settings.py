@@ -1,10 +1,11 @@
-"""悬浮窗的设置：位置、宽度、透明度、小窗模式、吸附等，保存在 %APPDATA%\\AIInferPeek\\settings.json。"""
+"""悬浮窗和托盘的设置：位置、宽度、透明度、小窗模式、吸附、自动检查更新等，保存在 %APPDATA%\\AIInferPeek\\settings.json。"""
 
 import json
 import logging
 import threading
 
 from ..config import write_atomic
+from ..i18n import N_
 from .system import DATA_DIR, SETTINGS_FILE
 
 log = logging.getLogger("aiinferpeek")
@@ -21,12 +22,15 @@ DEFAULTS = {
     "visible": True,
     "compact": False,
     "dock": "none",
+    "check_update": True,  # 自动检查新版本（启动后和每天一次），见 update.py
+    "update_notified": None,  # 已经弹过通知的新版本号：同一个版本只提醒一次，重启后也不再弹
 }
-WIDTHS = {"窄": 260, "中": 300, "宽": 360}
+# 托盘菜单里的名字用 N_() 标出来，建菜单时按当前语言翻译
+WIDTHS = {N_("窄"): 260, N_("中"): 300, N_("宽"): 360}
 COMPACT_WIDTH = 240  # 小窗模式：不画进度条和折线，只显示数字
 OPACITIES = (100, 90, 80, 70, 60)
-THEMES = {"system": "跟随系统", "dark": "深色", "light": "浅色"}
-DOCKS = {"none": "不吸附", "top": "顶部", "bottom": "底部"}
+THEMES = {"system": N_("跟随系统"), "dark": N_("深色"), "light": N_("浅色")}
+DOCKS = {"none": N_("不吸附"), "top": N_("顶部"), "bottom": N_("底部")}
 
 
 def _is_int(v):
@@ -46,6 +50,8 @@ SETTING_CHECKS = {
     "visible": lambda v: isinstance(v, bool),
     "compact": lambda v: isinstance(v, bool),
     "dock": lambda v: isinstance(v, str) and v in DOCKS,
+    "check_update": lambda v: isinstance(v, bool),
+    "update_notified": lambda v: v is None or (isinstance(v, str) and len(v) <= 32),
 }
 
 
@@ -82,6 +88,14 @@ class Settings(dict):
             self._timer = threading.Timer(delay, self._write)
             self._timer.daemon = True
             self._timer.start()
+
+    def flush(self):
+        """马上写盘，不等 save() 的定时器：退出、关机时用。"""
+        with self._lock:
+            if self._timer:
+                self._timer.cancel()
+                self._timer = None
+        self._write()
 
     def _write(self):
         # 写到一半崩溃也不会留下坏文件（见 write_atomic）；定时器线程和退出时的主线程可能同时写，所以持锁

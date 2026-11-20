@@ -16,6 +16,10 @@
   --warning: #fab219;
   --critical: #d03b3b;
   --shadow: 0 4px 16px rgba(11, 11, 11, 0.12);
+  /* 主按钮（设置页面的“保存”）：浅色是蓝底白字，比开关的蓝深一点，白字才看得清；深色是浅底深字 */
+  --primary: #2569c4;
+  --primary-hover: #1f58a6;
+  --on-primary: #fff;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -34,6 +38,9 @@
     --series-2: #d95926;
     --track: #22354c;
     --shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+    --primary: #f0efec;
+    --primary-hover: #c3c2b7;
+    --on-primary: #0d0d0d;
   }
 }
 
@@ -52,10 +59,18 @@
   --series-2: #d95926;
   --track: #22354c;
   --shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  --primary: #f0efec;
+  --primary-hover: #c3c2b7;
+  --on-primary: #0d0d0d;
 }
 
 * {
   box-sizing: border-box;
+}
+
+/* 带 hidden 属性的一律不显示：.tiles、.split-layout 这类自己写了 display 的也一样（不然 display: grid 会盖掉浏览器默认的 display: none） */
+[hidden] {
+  display: none !important;
 }
 
 body {
@@ -65,6 +80,11 @@ body {
   font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif;
   font-size: 14px;
   line-height: 1.45;
+}
+
+/* 界面不是中文时，api/i18n.js 先加上这个类，web/i18n.js 换好静态文字后去掉，免得先闪一下中文 */
+.i18n-pending body {
+  visibility: hidden;
 }
 
 button {
@@ -83,7 +103,7 @@ button {
   align-items: center;
   flex-wrap: wrap;
   gap: 8px 16px;
-  padding: 16px 24px 12px;
+  padding: 16px 24px 4px;
 }
 
 .brand {
@@ -169,6 +189,74 @@ button {
   background: var(--warning);
 }
 
+/* 看板顶栏：版本号、检查更新按钮、查到的新版本、检查的结果 */
+.update-box {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 13px;
+}
+
+.app-version {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.btn.icon-only {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px 6px;
+}
+
+.btn.icon-only[hidden] {
+  display: none;
+}
+
+.is-checking .update-icon {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .is-checking .update-icon {
+    animation: none;
+  }
+}
+
+.update-badge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--primary);
+  color: var(--on-primary);
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+/* 结果太长（连不上 GitHub 的原因）时截断，鼠标停上去看全部；放宽了顶栏会挤成两行 */
+.update-msg {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+
+.update-msg:empty {
+  display: none;
+}
+
+.update-msg[data-level="error"] {
+  color: var(--critical);
+}
+
 .btn,
 .table-toggle,
 .seg button {
@@ -190,11 +278,25 @@ button {
   background: var(--hover);
 }
 
+/* 时间范围那一条固定在顶部，滚到下面的图表时也能切换；贴住时（is-stuck，由 app.js 的 initSticky 设）下面画一条线和内容分开 */
 .filters {
+  position: sticky;
+  top: 0;
+  z-index: 5;
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 0 24px 16px;
+  padding: 8px 24px 12px;
+  background: var(--page);
+}
+
+.filters.is-stuck {
+  box-shadow: 0 1px 0 var(--border);
+}
+
+.sticky-sentinel {
+  height: 1px;
+  margin-bottom: -1px;
 }
 
 .filter-label {
@@ -346,6 +448,19 @@ button {
 
 .charts.four {
   grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+/* 一直读不到的图收起来后（核显没有功耗、温度），剩下的按张数平分一行；data-count 由 app.js 的 render() 设 */
+.charts.four[data-count="3"] {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.charts.four[data-count="2"] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.charts.four[data-count="1"] {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .chart {
@@ -597,6 +712,16 @@ button {
   display: none;
 }
 
+/* 连不上、读取出错的原因，卡片内容最上面一行；错误信息里的长路径、地址可以在任意处折行 */
+.notice.card-error {
+  margin: 0 0 12px;
+  overflow-wrap: anywhere;
+}
+
+.card-error[hidden] {
+  display: none;
+}
+
 /* 还不准确的新功能（Beta），鼠标停上去看说明。看板和悬浮窗共用 */
 .beta-tag {
   display: inline-block;
@@ -763,6 +888,20 @@ button {
   vertical-align: -2px;
 }
 
+.ctx .status-icon {
+  margin-right: 4px;
+  vertical-align: -2px;
+}
+
+/* 列多的表里放不下的长名字截短，鼠标停上去看完整的 */
+.grid-table .clip {
+  display: inline-block;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+}
+
 .split {
   display: inline-flex;
   align-items: center;
@@ -794,6 +933,23 @@ button {
   margin: 8px 0 0;
   font-size: 12px;
   color: var(--text-muted);
+}
+
+/* 卡片底部的“数据来源”：默认收起的一段说明（ui.js 的 sourceNote） */
+.source-btn {
+  margin-top: 10px;
+  margin-right: 12px;
+  border-color: transparent;
+  padding-left: 0;
+}
+
+.source-note {
+  margin-top: 4px;
+}
+
+/* 按进程的显存表里计数器读数异常的那一格 */
+.vram-bad {
+  white-space: nowrap;
 }
 
 /* “为什么没有发现”：每个工具一项，标题行是状态，下面列出检测情况 */
@@ -916,14 +1072,22 @@ a.btn {
 }
 
 .btn-primary {
-  border-color: var(--text-primary);
-  background: var(--text-primary);
-  color: var(--page);
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--on-primary);
   font-weight: 600;
 }
 
 .btn-primary:not(:disabled):hover {
-  background: var(--text-secondary);
+  border-color: var(--primary-hover);
+  background: var(--primary-hover);
+}
+
+/* 禁用时和普通按钮的禁用样子一样（透明底、浅色字）。实心底再加半透明会变成一块灰色按钮，看着像能点，字也看不清 */
+.btn-primary:disabled {
+  border-color: var(--border);
+  background: transparent;
+  color: var(--text-secondary);
 }
 
 .brand-link {
@@ -1270,7 +1434,8 @@ a.btn {
 /* ---------- 窄屏 ---------- */
 
 @media (max-width: 1100px) {
-  .charts.four {
+  .charts.four,
+  .charts.four[data-count="3"] {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -1308,7 +1473,9 @@ a.btn {
     grid-row: 2;
   }
 
-  .charts.four {
+  .charts.four,
+  .charts.four[data-count="3"],
+  .charts.four[data-count="2"] {
     grid-template-columns: minmax(0, 1fr);
   }
 

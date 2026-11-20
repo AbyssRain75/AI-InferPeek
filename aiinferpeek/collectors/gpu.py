@@ -5,6 +5,7 @@
 
 import pynvml
 
+from ..i18n import tr
 from .dxgi import list_adapters
 from .wddm import WddmGpus, match_nvml
 
@@ -97,7 +98,14 @@ class GpuCollector:
         devices = self._nvidia.info() + self._wddm.info()
         for i, d in enumerate(devices):
             d["index"] = i
-        return {"devices": devices, "error": None if devices else "没有检测到显卡"}
+        return {"devices": devices, "error": None if devices else tr("未检测到显卡")}
+
+    def main_mem_total(self):
+        """主显卡的显存总量合计（字节）：有独显时是所有独显，否则是核显的专用 + 共享。
+        按进程的采集用它识别计数器的异常读数（GpuProcessCollector 的 vram_limit）；读不到时是 None。"""
+        indexes = {i for luid, i in self.luid_index.items() if luid in self.main_luids}
+        totals = [d["mem_total"] for d in self.info()["devices"] if d["index"] in indexes and d["mem_total"]]
+        return sum(totals) if totals else None
 
     def sample(self):
         return self._nvidia.sample() + self._wddm.sample()

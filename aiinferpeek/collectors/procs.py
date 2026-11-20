@@ -34,15 +34,18 @@ def used_devices(per_device):
 class GpuProcessCollector:
     name = "procs"
 
-    def __init__(self, owners=None, luids=(), devices=None):
+    def __init__(self, owners=None, luids=(), devices=None, vram_limit=None):
         """owners：可调用对象，返回 {pid: {"id", "label"}}，用来标出进程属于哪个模型服务。
         luids：只统计这些显卡（dxgi.luid_key() 的写法），一般是 GpuCollector.main_luids。
-        devices：{LUID: 显卡序号}，一般是 GpuCollector.luid_index，用来标出模型服务的进程用的是哪块显卡。"""
+        devices：{LUID: 显卡序号}，一般是 GpuCollector.luid_index，用来标出模型服务的进程用的是哪块显卡。
+        vram_limit：主显卡的显存总量合计（字节），一般是 GpuCollector.main_mem_total()。性能计数器偶尔给某个进程报出比它还大的
+        显存占用（本机见过 800 多 GB），超过它的读数照实显示但标成异常（vram_bad），不计入排序、合计和在哪块显卡上的判断；None 时不检查。"""
         self._owners = owners or (lambda: {})
         self._procs = {}
         self._ncpu = psutil.cpu_count() or 1
         self._luids = {luid.lower() for luid in luids}
         self._devices = {luid.lower(): i for luid, i in (devices or {}).items()}
+        self._vram_limit = vram_limit
         self._query = None
         try:
             q = PdhQuery()
@@ -105,14 +108,19 @@ class GpuProcessCollector:
         q = self._query
         q.collect()
         raw_dedicated, raw_shared = q.values("dedicated"), q.values("shared")
-        dedicated = self._per_pid(raw_dedicated)
+        # 比显卡总显存还大的读数是计数器的异常值：排序、合计、门槛、在哪块卡上都当作没有，表里照实显示但标出来
+        limit = self._vram_limit
+        clean = {inst: v for inst, v in raw_dedicated.items() if not (limit and v > limit)}
+        dedicated = self._per_pid(clean)
+        shown = self._per_pid(raw_dedicated)  # 表里显示的数（含异常读数）
+        bad = set(self._per_pid({inst: v for inst, v in raw_dedicated.items() if inst not in clean}))  # 主显卡上有异常读数的进程
         shared = self._per_pid(raw_shared)
         engines = self._engine_util(q.values("engine"))
         owners = self._owners()
 
         pids = {pid for pid in set(dedicated) | set(shared) if dedicated.get(pid, 0) + shared.get(pid, 0) >= MIN_BYTES}
         pids |= set(owners)
-        gpu_bytes = self._gpu_bytes([*raw_dedicated.items(), *raw_shared.items()], pids)
+        gpu_bytes = self._gpu_bytes([*clean.items(), *raw_shared.items()], pids)
         shared_bytes = self._gpu_bytes(raw_shared.items(), pids)
         main = {self._devices[luid] for luid in self._luids if luid in self._devices}
         rows = []
@@ -128,12 +136,14 @@ class GpuProcessCollector:
                 continue
             util, engine = engines.get(pid, (0.0, None))
             owner = owners.get(pid)
+            vram = round(dedicated.get(pid, 0))  # 排序、合计用的（异常读数按 0 算）
             row = {
                 "pid": pid,
                 "name": name,
                 "owner": owner["id"] if owner else None,
                 "owner_label": owner["label"] if owner else None,
-                "vram": round(dedicated.get(pid, 0)),
+                "vram": round(shown.get(pid, 0)),
+                **({"vram_bad": True} if pid in bad else {}),
                 "shared": round(shared.get(pid, 0)),
                 "gpu": round(min(util, 100.0), 1),
                 "engine": engine,
@@ -146,13 +156,13 @@ class GpuProcessCollector:
                 # 每个模型服务的合计包含它的全部子进程，即使没用显卡
                 t = totals.setdefault(owner["id"], {"vram": 0, "shared": 0, "gpu": 0.0, "mem": 0, "cpu": 0.0})
                 for k in t:
-                    t[k] += row[k]
-            if row["vram"] + row["shared"] >= MB:
+                    t[k] += vram if k == "vram" else row[k]
+            if vram + row["shared"] >= MB:
                 rows.append(row)
         for pid in list(self._procs):
             if pid not in pids:
                 del self._procs[pid]
-        rows.sort(key=lambda r: r["vram"] + r["shared"], reverse=True)
+        rows.sort(key=lambda r: dedicated.get(r["pid"], 0) + r["shared"], reverse=True)
         for t in totals.values():
             t["gpu"] = round(min(t["gpu"], 100.0), 1)
             t["cpu"] = round(t["cpu"], 1)

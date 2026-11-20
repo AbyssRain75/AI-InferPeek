@@ -1,10 +1,12 @@
-"""命令行工具（Claude Code、Codex、DeepSeek Harness、Grok Build、OpenCode、OpenClaw、Antigravity）共用的部分：会话一行的字段、输出速度、卡片汇总、完成提示。"""
+"""命令行工具（Claude Code、Codex、DeepSeek Harness、Grok Build、OpenCode、OpenClaw、Antigravity、Cursor、WorkBuddy）共用的部分：会话一行的字段、输出速度、卡片汇总、完成提示。"""
 
 import json
 import os
 import time
 from collections import deque
+from urllib.parse import unquote, urlsplit
 
+from ..i18n import N_, tr
 from .base import Adapter, prune
 from .jsonl import version_key
 
@@ -25,15 +27,33 @@ FIELDS = (
 
 
 def outcome(result, detail=None):
-    """上一个回合怎么结束的：ok 完成、failed 失败、interrupted 被中断、lost 很久没有新记录（可能已经中断）。"""
+    """上一个回合怎么结束的：ok 完成、failed 失败、interrupted 被中断、lost 很久没有新记录（可能已经中断）。
+    detail 是用 N_() 标出的中文说明，提示完成时（finished()）才按当前语言翻译，里面的 {n} 是 STALE 的分钟数。"""
     return {"result": result, "detail": detail}
 
 
-LOST = outcome("lost", f"{STALE // 60} 分钟没有新记录")
+LOST = outcome("lost", N_("{n} 分钟无新记录"))
 
 
 def folder_name(path):
     return os.path.basename((path or "").rstrip("\\/"))
+
+
+def local_path(host, path):
+    """file 地址里的主机和（已解码的）路径转成本机路径：有主机的是共享文件夹 \\\\服务器\\共享，/g:/x 这种去掉开头的斜杠。"""
+    if host:
+        path = f"//{host}{path}"
+    elif len(path) > 2 and path[0] == "/" and path[2] == ":":
+        path = path[1:]
+    return os.path.normpath(path)
+
+
+def uri_path(uri):
+    """file:///g%3A/Novel%20AI 这样的地址转成本机路径，不是 file 地址的原样返回（Antigravity、Cursor 记的工作区是这种地址）。"""
+    parts = urlsplit(uri)
+    if parts.scheme != "file":
+        return uri
+    return local_path(parts.netloc, unquote(parts.path))
 
 
 def read_json(path):
@@ -92,7 +112,7 @@ def summarize(sessions, limit=None, **extra):
 class CliAdapter(Adapter):
     """命令行工具的公共基类：poll() 返回 summarize() 的结果。
 
-    对不上进程和会话、列最近有活动的会话的工具（Codex、DeepSeek Harness、Grok Build、OpenClaw）实现 _scan_sessions()，
+    对不上进程和会话、列最近有活动的会话的工具（Codex、DeepSeek Harness、Grok Build、OpenClaw、WorkBuddy）实现 _scan_sessions()，
     poll() 里用 _session_paths() 取会话文件，不用每秒都遍历一遍文件夹。"""
 
     category = "cli"
@@ -127,7 +147,7 @@ class CliAdapter(Adapter):
                     "result": end["result"],
                     "t": now,
                     "duration": stop - since if since else None,
-                    "detail": end["detail"],
+                    "detail": tr(end["detail"], n=STALE // 60) if end["detail"] else None,
                 })
         return out
 

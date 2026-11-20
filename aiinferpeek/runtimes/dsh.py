@@ -16,6 +16,7 @@ import os
 import time
 from datetime import datetime, timedelta, timezone
 
+from ..i18n import N_
 from .cli import LOST, CliAdapter, MAX_SESSIONS, RECENT, STALE, Rate, read_json, session, summarize, track, usage
 
 LEDGERS = (".dshw-usage.json", os.path.join("profiles", "web", ".dshw-usage.json"))
@@ -68,16 +69,19 @@ class Balance:
         for path in self.paths:
             try:
                 info = os.stat(path)
-            except OSError:
-                self.files.pop(path, None)
+            except FileNotFoundError:
+                self.files.pop(path, None)  # 没有这个账本，或者删掉了：不再用它的
                 continue
-            key = (info.st_mtime, info.st_size)
-            if self.files.get(path, (None,))[0] != key:
-                parsed = parse_ledger(read_json(path))
-                if parsed is not None:
-                    if parsed["t"] is None:
-                        parsed["t"] = info.st_mtime * 1000  # 老账本没有记查询时间，用文件的修改时间
-                    self.files[path] = (key, parsed)
+            except OSError:
+                pass  # 一时读不了（被占用、没权限）：沿用上次读到的
+            else:
+                key = (info.st_mtime, info.st_size)
+                if self.files.get(path, (None,))[0] != key:
+                    parsed = parse_ledger(read_json(path))
+                    if parsed is not None:
+                        if parsed["t"] is None:
+                            parsed["t"] = info.st_mtime * 1000  # 老账本没有记查询时间，用文件的修改时间
+                        self.files[path] = (key, parsed)
             if path in self.files:
                 found.append(self.files[path][1])
         self.value = max(found, key=lambda b: b["t"], default=None)
@@ -165,7 +169,7 @@ class DshAdapter(CliAdapter):
     kind = "dsh"  # 内部标识，disabled_tools、balance_warning 里写的都是它，不要改
     label = "DeepSeek Harness"
     process_names = frozenset({"deepseek harness.exe", "deepseek harness", "deepseek-harness", "node.exe", "node"})
-    match_hint = "node 进程要在启动参数里带 @deepseek-ai"
+    match_hint = N_("node 进程的启动参数中需包含 @deepseek-ai")
     config_key = "dsh_dir"
     has_balance = True
     settings = ("balance_warn",)

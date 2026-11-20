@@ -13,7 +13,8 @@ class RuntimesCollector:
         manager.start()
 
     def info(self):
-        return {"supported": [a.label for a in self.manager.adapters]}
+        # 用最近一次交给 manager 的：manager.adapters 是后台线程在读写的，保存设置后也可能还没换上
+        return {"supported": [a.label for a in self.adapters]}
 
     def sample(self):
         return self.manager.snapshot()

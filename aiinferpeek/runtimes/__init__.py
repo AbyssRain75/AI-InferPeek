@@ -4,12 +4,14 @@ from .antigravity import AntigravityAdapter
 from .claude_code import ClaudeCodeAdapter
 from .codex import CodexAdapter
 from .comfyui import ComfyUIAdapter
+from .cursor import CursorAdapter
 from .dsh import DshAdapter
 from .grok import GrokBuildAdapter
 from .manager import RuntimeManager
 from .ollama import OllamaAdapter
 from .opencode import OpencodeAdapter
 from .openclaw import OpenclawAdapter
+from .workbuddy import WorkBuddyAdapter
 
 
 def default_adapters(config):
@@ -25,6 +27,8 @@ def default_adapters(config):
         OpencodeAdapter(home=config.get("opencode_dir")),
         OpenclawAdapter(home=config.get("openclaw_dir")),
         AntigravityAdapter(home=config.get("antigravity_dir")),
+        CursorAdapter(home=config.get("cursor_dir")),
+        WorkBuddyAdapter(home=config.get("workbuddy_dir")),
     ]
     return [a for a in adapters if a.kind not in disabled]
 

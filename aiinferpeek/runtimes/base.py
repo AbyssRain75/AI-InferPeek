@@ -15,12 +15,30 @@
 """
 
 import json
+import logging
 import os
 import urllib.error
 import urllib.request
 
+import psutil
+
+log = logging.getLogger("aiinferpeek")
+
 # 不走系统代理：本机服务经过代理会失败或变慢
 _opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def ppid_map():
+    """{进程号: 父进程号}，一次枚举整张进程表；读不到时返回空 dict。
+    Windows 上 psutil 的 ppid()、children() 每调一次都要枚举一次进程表，进程一多就很慢，要看好几个进程的父进程时用这个。
+    父进程退出后，子进程记着的父进程号不会变，可能已经被别的进程复用了，要核对启动时间时自己比。"""
+    try:
+        if hasattr(psutil, "_ppid_map"):
+            return psutil._ppid_map()
+        return {p.pid: p.info["ppid"] for p in psutil.process_iter(["ppid"])}
+    except (psutil.Error, OSError):
+        log.debug("读取进程表失败", exc_info=True)
+        return {}
 
 
 class HttpStatusError(OSError):
@@ -60,12 +78,20 @@ class Instance:
         self.meta = {}  # probe() 返回的信息
         self.state = {}  # 适配器自己的状态
         self.done = []  # 最近完成的任务（finished() 找出来的）
+        # 本机发现的服务：进程在接口那个端口上监听的全部地址（0.0.0.0、::、127.0.0.1 这样），url 里的主机是由其中一个换算的
+        self.listen = []
+        self.endpoints = []  # 本机发现的服务：手动添加的地址里指的就是它的那些（写法可能不同，比如 localhost），诊断时说明
 
     @property
     def id(self):
         if self.url:
-            host = self.url.split("://", 1)[-1].rstrip("/")
-            return f"{self.adapter.kind}@{host}"
+            scheme, sep, host = self.url.partition("://")
+            if not sep:
+                scheme, host = "", self.url
+            host = host.rstrip("/")
+            # http 的只写主机和端口；别的协议带上，免得和同一个地址上本机发现的 http 服务（或手动添加的 http 地址）撞上
+            scheme = scheme.lower()
+            return f"{self.adapter.kind}@{host}" if scheme in ("", "http") else f"{self.adapter.kind}@{scheme}://{host}"
         if self.main_pid:
             return f"{self.adapter.kind}@pid{self.main_pid}"
         return f"{self.adapter.kind}@local"
@@ -87,7 +113,7 @@ class Adapter:
     category = "service"  # "service"：模型服务，读 HTTP 接口；"cli"：命令行工具，读本地会话文件
     process_names = frozenset()
     default_ports = ()
-    match_hint = ""  # 除了进程名还要满足什么条件，没有找到进程时页面上说明
+    match_hint = ""  # 除了进程名还要满足什么条件，没有找到进程时页面上说明；用 N_() 标出来，页面上按当前语言翻译
     config_key = None  # aiinferpeek.json 里改数据目录（或日志位置）的键
     has_balance = False  # 读得到账户余额（按量付费的工具），设置页面上给它填余额预警
     # 设置保存后可以直接换上的属性（不用重建适配器、不丢状态）：数据位置没变时把新建的适配器上的这些值抄到原来的上

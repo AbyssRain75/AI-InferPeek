@@ -1,8 +1,9 @@
 import { niceScale, capacityScale, showTooltip, hideTooltip } from './chart.js';
-import { GB, h, store, num, gb, bytes, ratioOf, PERCENT_SCALE, tile, chartFigure, dataTable, card, sectionTitle, pushSample } from './ui.js';
-import { runtimeView, modelsView, activeRuntimeIds, activeFirst, recentDone, setGpuDevices, mainGpus, gpuText } from './runtimes.js';
+import { GB, h, store, num, gb, bytes, ratioOf, PERCENT_SCALE, vramCell, tile, chartFigure, dataTable, card, sectionTitle, pushSample } from './ui.js';
+import { runtimeView, modelsView, activeRuntimeIds, activeFirst, recentDone, setGpuDevices, setSampleInterval, mainGpus, gpuText } from './runtimes.js';
 import { noRuntimesView } from './diagnostics.js';
 import { connectStream } from './stream.js';
+import { tr, followLanguage } from './i18n.js';
 
 const state = {
   info: null,
@@ -22,30 +23,42 @@ const powerScale = (pts) => niceScale(Math.max(10, ...pts.map((p) => p.v ?? 0)),
 
 // ---------- 硬件面板 ----------
 
-// multi：有几块主显卡（比如两块独显），按进程的表要标出每个进程在哪块上
-function gpuView(dev, i, { multi = false } = {}) {
+// multi：有几块主显卡（比如两块独显），按进程的表要标出每个进程在哪块上。
+// foldable：有独显时的核显卡片可以折叠，默认折起来（平时不看它），展开过就记住
+const IGPU_FOLD_KEY = 'aiinferpeek-fold-igpu';
+
+function gpuView(dev, i, { multi = false, foldable = false } = {}) {
   const memTotal = dev.mem_total;
   // 核显没有自己的显存，用的是借来的内存（专用 + 共享，任务管理器里叫“GPU 内存”）
-  const memLabel = dev.integrated ? '共享显存（借用内存）' : '显存';
-  const c = card(dev.integrated ? '核显' : '显卡', [dev.name, dev.driver ? `驱动 ${dev.driver}` : null].filter(Boolean).join(' · '), { wide: true });
+  const memLabel = dev.integrated ? tr('共享显存（借用内存）') : tr('显存');
+  const c = card(dev.integrated ? tr('核显') : tr('显卡'), [dev.name, dev.driver ? tr('驱动 {v}', { v: dev.driver }) : null].filter(Boolean).join(' · '), { wide: true, foldable });
+  if (foldable) {
+    c.onToggle = (folded) => {
+      c.fold(folded);
+      store.set(IGPU_FOLD_KEY, folded ? '1' : '0');
+      render();
+    };
+    c.fold(store.get(IGPU_FOLD_KEY) !== '0');
+  }
   const t = {
-    util: tile('利用率'),
+    util: tile(tr('利用率')),
     mem: tile(memLabel, { meter: true }),
-    temp: tile('温度'),
-    power: tile('功耗'),
-    clock: tile('核心频率'),
-    memClock: tile('显存频率'),
-    fan: tile('风扇'),
+    temp: tile(tr('温度')),
+    power: tile(tr('功耗')),
+    clock: tile(tr('核心频率')),
+    memClock: tile(tr('显存频率')),
+    fan: tile(tr('风扇')),
   };
   t.fan.hide(true);
   t.memClock.hide(!!dev.integrated); // 核显用的是内存，没有显存频率
   c.body.append(h('div', { class: 'tiles' }, ...Object.values(t).map((x) => x.el)));
 
   const g = (s) => s.gpus?.[i];
+  // 一直读不到的项（核显的功耗、温度，没有计数器时的显存）整张图收起来，剩下的图按张数平分一行（见 render() 里的 data-count）
   const charts = [
-    chartFigure({ title: '利用率', get: (s) => g(s)?.util, scale: PERCENT_SCALE, format: (v) => `${num(v)}%`, gapMs: gapMs() }),
+    chartFigure({ title: tr('利用率'), get: (s) => g(s)?.util, scale: PERCENT_SCALE, format: (v) => `${num(v)}%`, gapMs: gapMs(), hideWhenEmpty: true }),
     chartFigure({
-      title: `${memLabel}占用`,
+      title: tr('{name}占用', { name: memLabel }),
       get: (s) => (g(s)?.mem_used != null ? g(s).mem_used / GB : null),
       // 读不到显存总量时按图上的最大值定刻度
       scale: memTotal
@@ -53,65 +66,71 @@ function gpuView(dev, i, { multi = false } = {}) {
         : (pts) => capacityScale(Math.max(1, ...pts.map((p) => p.v ?? 0)), (v) => `${v} GB`),
       format: (v) => `${num(v, 1)} GB`,
       gapMs: gapMs(),
+      hideWhenEmpty: true,
     }),
     chartFigure({
-      title: '功耗',
+      title: tr('功耗'),
       get: (s) => g(s)?.power,
       scale: dev.power_limit ? niceScale(dev.power_limit, (v) => `${v} W`) : powerScale,
       format: (v) => `${num(v, 1)} W`,
       gapMs: gapMs(),
+      hideWhenEmpty: true,
     }),
     chartFigure({
-      title: '温度',
+      title: tr('温度'),
       get: (s) => g(s)?.temp,
       scale: TEMP_SCALE,
       format: (v) => `${num(v)}°C`,
       gapMs: gapMs(),
+      hideWhenEmpty: true,
     }),
   ];
-  c.body.append(h('div', { class: 'charts four' }, ...charts.map((x) => x.el)));
+  const chartsEl = h('div', { class: 'charts four' }, ...charts.map((x) => x.el));
+  c.body.append(chartsEl);
 
   // 按进程的显存占用：统计的是主显卡（有独显时是独显，否则是核显），显示在排第一的显卡卡片里
   const procTable = dataTable(
     [
-      { label: '进程' },
-      { label: '属于' },
-      ...(multi ? [{ label: '显卡' }] : []),
-      { label: '显存', cls: 'num-col' },
-      { label: '共享显存', cls: 'num-col' },
+      { label: tr('进程') },
+      { label: tr('属于') },
+      ...(multi ? [{ label: tr('显卡') }] : []),
+      { label: tr('显存'), cls: 'num-col' },
+      { label: tr('共享显存'), cls: 'num-col' },
       { label: 'GPU', cls: 'num-col' },
-      { label: '内存', cls: 'num-col' },
+      { label: tr('内存'), cls: 'num-col' },
       { label: 'CPU', cls: 'num-col' },
     ],
-    { empty: '没有读到按进程的显存数据' },
+    { empty: tr('未获取到按进程的显存数据') },
   );
   const procSection = h(
     'div',
     { class: 'proc-section' },
-    sectionTitle(multi ? '显存占用（按进程，所有独显合计）' : '显存占用（按进程）'),
+    sectionTitle(multi ? tr('显存占用（按进程，所有独显合计）') : tr('显存占用（按进程）')),
     procTable.el,
     h('p', {
       class: 'footnote',
       text: dev.integrated
-        ? '核显没有自己的显存，用的是内存，算在共享显存里。'
-        : '共享显存是显存不够时借用的内存，读写比显存慢得多；模型的一部分落在这里时，速度会明显下降。',
+        ? tr('核显无独立显存，占用的是内存，计入共享显存。')
+        : tr('共享显存是显存不足时借用的内存，读写速度远低于显存；模型有一部分位于共享显存时，速度会明显下降。'),
     }),
   );
   if (i === 0) c.body.append(procSection);
 
   return {
     el: c.el,
+    card: c,
     charts,
+    chartsEl,
     update(s) {
-      const d = g(s);
-      if (!d) return;
+      // 这一次没采到（采集出错）时按全都读不到显示“—”，不停在上一次的数字上
+      const d = g(s) || {};
       t.util.set(num(d.util), '%');
       t.mem.set(gb(d.mem_used), ` / ${gb(d.mem_total)} GB`);
       const memRatio = ratioOf(d.mem_used, d.mem_total);
-      t.mem.level(memRatio, memRatio != null ? `空闲 ${gb(d.mem_total - d.mem_used)} GB` : '');
+      t.mem.level(memRatio, memRatio != null ? tr('空闲 {v} GB', { v: gb(d.mem_total - d.mem_used) }) : '');
       t.temp.set(num(d.temp), '°C');
       t.power.set(num(d.power, 1), dev.power_limit ? ` / ${num(dev.power_limit)} W` : ' W');
-      t.clock.set(num(d.clock_gr), ' MHz', [dev.clock_max ? `最高 ${num(dev.clock_max)} MHz` : null, d.pstate].filter(Boolean).join(' · '));
+      t.clock.set(num(d.clock_gr), ' MHz', [dev.clock_max ? tr('最高 {v} MHz', { v: num(dev.clock_max) }) : null, d.pstate].filter(Boolean).join(' · '));
       t.memClock.set(num(d.clock_mem), ' MHz');
       // NVML 给的是百分比，通用方式（AMD 等）给的是转速
       t.fan.hide(d.fan == null && d.fan_rpm == null);
@@ -126,7 +145,7 @@ function gpuView(dev, i, { multi = false } = {}) {
           [h('strong', { text: p.name }), h('span', { class: 'muted', text: ` ${p.pid}` })],
           p.owner_label || '—',
           ...(multi ? [h('span', { text: gpuText(p.devices) || '—', title: gpuText(p.devices, { full: true }) || '' })] : []),
-          bytes(p.vram),
+          vramCell(p),
           p.shared ? bytes(p.shared) : '—',
           `${num(p.gpu)}%`,
           bytes(p.mem),
@@ -138,19 +157,20 @@ function gpuView(dev, i, { multi = false } = {}) {
 }
 
 function noGpuView(message) {
-  const c = card('显卡', '', { wide: true });
-  c.body.append(h('p', { class: 'empty', text: message || '没有检测到显卡。' }));
+  const c = card(tr('显卡'), '', { wide: true });
+  c.body.append(h('p', { class: 'empty', text: message || tr('未检测到显卡') }));
   return { el: c.el, charts: [], update() {} };
 }
 
 function cpuView(info) {
-  const c = card('CPU', [info.name, `${info.cores} 核 ${info.threads} 线程`].join(' · '));
-  const t = { pct: tile('占用'), freq: tile('速度'), temp: tile('温度'), power: tile('功耗') };
+  const c = card('CPU', [info.name, tr('{cores} 核 {threads} 线程', { cores: info.cores, threads: info.threads })].join(' · '));
+  const t = { pct: tile(tr('占用')), freq: tile(tr('速度')), temp: tile(tr('温度')), power: tile(tr('功耗')) };
   c.body.append(h('div', { class: 'tiles' }, ...Object.values(t).map((x) => x.el)));
 
-  const usage = chartFigure({ title: '占用', get: (s) => s.cpu?.percent, scale: PERCENT_SCALE, format: (v) => `${num(v)}%`, gapMs: gapMs() });
-  const temp = chartFigure({ title: '温度', get: (s) => s.cpu?.temp, scale: TEMP_SCALE, format: (v) => `${num(v)}°C`, gapMs: gapMs() });
-  const power = chartFigure({ title: '功耗', get: (s) => s.cpu?.power, scale: powerScale, format: (v) => `${num(v, 1)} W`, gapMs: gapMs() });
+  const usage = chartFigure({ title: tr('占用'), get: (s) => s.cpu?.percent, scale: PERCENT_SCALE, format: (v) => `${num(v)}%`, gapMs: gapMs() });
+  // 温度、功耗一直读不到（没开 LibreHardwareMonitor、没有能量计）时整张图收起来，只留下面那句原因
+  const temp = chartFigure({ title: tr('温度'), get: (s) => s.cpu?.temp, scale: TEMP_SCALE, format: (v) => `${num(v)}°C`, gapMs: gapMs(), hideWhenEmpty: true });
+  const power = chartFigure({ title: tr('功耗'), get: (s) => s.cpu?.power, scale: powerScale, format: (v) => `${num(v, 1)} W`, gapMs: gapMs(), hideWhenEmpty: true });
   // 读不到 CPU 温度的原因（多半是没开 LibreHardwareMonitor），读到了不显示
   const tempNote = h('p', { class: 'footnote', hidden: true });
 
@@ -161,10 +181,10 @@ function cpuView(info) {
   const coreTable = h(
     'table',
     { class: 'data-table', hidden: true },
-    h('thead', {}, h('tr', {}, h('th', { text: '核心' }), h('th', { text: '占用' }))),
+    h('thead', {}, h('tr', {}, h('th', { text: tr('核心') }), h('th', { text: tr('占用') }))),
     coreTbody,
   );
-  const coreBtn = h('button', { class: 'table-toggle', type: 'button', 'aria-pressed': 'false', text: '表格' });
+  const coreBtn = h('button', { class: 'table-toggle', type: 'button', 'aria-pressed': 'false', text: tr('表格') });
   coreBtn.addEventListener('click', () => {
     const show = coreTable.hidden;
     coreTable.hidden = !show;
@@ -173,7 +193,7 @@ function cpuView(info) {
   let perCore = [];
   const coreTip = (i, target) => {
     const r = target.getBoundingClientRect();
-    showTooltip(r.left + r.width / 2, r.top, `${num(perCore[i])}%`, `核心 ${i}`);
+    showTooltip(r.left + r.width / 2, r.top, `${num(perCore[i])}%`, tr('核心 {i}', { i }));
   };
   function ensureBars(n) {
     while (bars.length < n) {
@@ -201,7 +221,7 @@ function cpuView(info) {
   const coresFig = h(
     'figure',
     { class: 'chart' },
-    h('figcaption', {}, h('span', { class: 'chart-title', text: '各核心占用' }), coreBtn),
+    h('figcaption', {}, h('span', { class: 'chart-title', text: tr('各核心占用') }), coreBtn),
     coresEl,
     coreTable,
   );
@@ -211,8 +231,7 @@ function cpuView(info) {
     el: c.el,
     charts: [usage, temp, power],
     update(s) {
-      const d = s.cpu;
-      if (!d) return;
+      const d = s.cpu || {}; // 没采到时显示“—”，见 gpuView
       t.pct.set(num(d.percent), '%');
       t.freq.set(d.freq_mhz != null ? num(d.freq_mhz / 1000, 2) : '—', ' GHz');
       t.temp.set(num(d.temp), '°C');
@@ -221,23 +240,24 @@ function cpuView(info) {
       tempNote.textContent = d.temp_note || '';
       perCore = d.per_core || [];
       ensureBars(perCore.length);
-      perCore.forEach((v, i) => {
-        bars[i].fill.style.height = `${Math.min(v, 100)}%`;
-        bars[i].item.setAttribute('aria-label', `核心 ${i}：${num(v)}%`);
+      // 已有的竖条都更新：这一次没采到时清空，不停在上一次的高度
+      bars.forEach((b, i) => {
+        b.fill.style.height = `${Math.min(perCore[i] ?? 0, 100)}%`;
+        b.item.setAttribute('aria-label', tr('核心 {i}：{v}%', { i, v: num(perCore[i]) }));
       });
       if (!coreTable.hidden) {
-        coreTbody.replaceChildren(...perCore.map((v, i) => h('tr', {}, h('td', { text: `核心 ${i}` }), h('td', { text: `${num(v)}%` }))));
+        coreTbody.replaceChildren(...perCore.map((v, i) => h('tr', {}, h('td', { text: tr('核心 {i}', { i }) }), h('td', { text: `${num(v)}%` }))));
       }
     },
   };
 }
 
 function memView(info) {
-  const c = card('内存', `${gb(info.total)} GB`);
-  const t = { used: tile('已用', { meter: true }), avail: tile('可用'), swap: tile('页面文件') };
+  const c = card(tr('内存'), `${gb(info.total)} GB`);
+  const t = { used: tile(tr('已用'), { meter: true }), avail: tile(tr('可用')), swap: tile(tr('页面文件')) };
   c.body.append(h('div', { class: 'tiles' }, t.used.el, t.avail.el, t.swap.el));
   const usage = chartFigure({
-    title: '已用',
+    title: tr('已用'),
     get: (s) => (s.mem ? s.mem.used / GB : null),
     scale: capacityScale(info.total / GB, (v) => `${v} GB`),
     format: (v) => `${num(v, 1)} GB`,
@@ -248,8 +268,7 @@ function memView(info) {
     el: c.el,
     charts: [usage],
     update(s) {
-      const d = s.mem;
-      if (!d) return;
+      const d = s.mem || {}; // 没采到时显示“—”，见 gpuView
       t.used.set(gb(d.used), ` / ${gb(d.total)} GB`);
       t.used.level(ratioOf(d.used, d.total), d.percent != null ? `${num(d.percent)}%` : '');
       t.avail.set(gb(d.available), ' GB');
@@ -276,7 +295,8 @@ function build() {
   for (const v of [...state.views, ...state.runtimes.values()]) destroyCharts(v);
   state.views = [];
   const multi = mainGpus(devices).length > 1;
-  if (devices.length) devices.forEach((d, i) => state.views.push(gpuView(d, i, { multi })));
+  // 有独显时核显卡片可以折叠（默认折起来），只有核显时它就是主显卡，照常展开
+  if (devices.length) devices.forEach((d, i) => state.views.push(gpuView(d, i, { multi, foldable: devices.length > 1 && !!d.integrated })));
   else state.views.push(noGpuView(info.gpus?.error));
   if (info.cpu) state.views.push(cpuView(info.cpu));
   if (info.mem) state.views.push(memView(info.mem));
@@ -298,7 +318,7 @@ function renderTitle() {
   const name = state.deviceName;
   document.getElementById('device-name').textContent = name || host || '';
   const gpus = (info.gpus?.devices ?? []).map((d) => d.name);
-  const mem = info.mem ? `${gb(info.mem.total)} GB 内存` : null;
+  const mem = info.mem ? tr('{v} GB 内存', { v: gb(info.mem.total) }) : null;
   const machine = document.getElementById('machine');
   machine.textContent = [name ? host : null, shortModel(info.cpu?.name), mem, ...gpus].filter(Boolean).join(' · ');
   machine.title = [host, info.cpu?.name, mem, ...gpus].filter(Boolean).join('\n');
@@ -365,7 +385,10 @@ function render() {
   }
   for (const v of state.views) {
     v.update(last);
+    if (v.card?.folded) continue;
     for (const c of v.charts) c.update(state.history, t0, t1);
+    // 收起了几张图后，剩下的按张数平分一行（见 style.css 的 .charts.four[data-count]）
+    if (v.chartsEl) v.chartsEl.dataset.count = String(v.charts.filter((c) => !c.el.hidden).length);
   }
 }
 
@@ -380,16 +403,19 @@ function connect() {
       state.info = data.info;
       state.history = data.history;
       setGpuDevices(data.info.gpus?.devices);
+      setSampleInterval(data.info.interval);
       if (hardwareKey(data.info) !== state.hardware) build();
       const last = data.history[data.history.length - 1];
       if (last) updateDeviceName(last);
+      followLanguage(last);
     },
     onSample(s) {
       pushSample(state.history, s, (state.info?.history_seconds ?? 600) * 1000);
       updateDeviceName(s); // 在后台时也换，浏览器标签上的标题跟着变
+      followLanguage(s); // 设置里改了界面语言时重新加载
     },
     render,
-    downText: '连接断开，正在重连…',
+    downText: tr('连接断开，正在重连…'),
   });
 }
 
@@ -415,16 +441,16 @@ function initRange() {
 // 主题：跟随系统 / 浅色 / 深色
 function initTheme() {
   const modes = [
-    ['system', '跟随系统'],
-    ['light', '浅色'],
-    ['dark', '深色'],
+    ['system', tr('跟随系统')],
+    ['light', tr('浅色')],
+    ['dark', tr('深色')],
   ];
   const btn = document.getElementById('theme');
   let mode = store.get('aiinferpeek-theme') || 'system';
   const apply = () => {
     if (mode === 'system') delete document.documentElement.dataset.theme;
     else document.documentElement.dataset.theme = mode;
-    btn.textContent = `主题：${modes.find((m) => m[0] === mode)?.[1] ?? '跟随系统'}`;
+    btn.textContent = tr('主题：{name}', { name: modes.find((m) => m[0] === mode)?.[1] ?? tr('跟随系统') });
     redrawCharts();
   };
   btn.addEventListener('click', () => {
@@ -437,6 +463,71 @@ function initTheme() {
   apply();
 }
 
+// 版本号和检查更新：版本号一直显示；查到过比现在新的版本时旁边是“新版本 x.y.z”，点开它的发布页面（桌面版的窗口交给浏览器打开）。
+// 桌面版的托盘自动检查查到的这里也有，切回这个页面时再取一次。开放到局域网时没有检查按钮（不让别的电脑叫它联网）
+function initUpdate() {
+  const versionEl = document.getElementById('app-version');
+  const btn = document.getElementById('check-update');
+  const badge = document.getElementById('new-version');
+  const msg = document.getElementById('update-msg');
+  let timer = 0;
+  const show = (d) => {
+    versionEl.textContent = `v${d.version}`;
+    versionEl.title = tr('当前版本 {v}', { v: d.version });
+    btn.hidden = !d.can_check;
+    badge.hidden = !d.latest;
+    if (d.latest) {
+      badge.textContent = tr('新版本 {v}', { v: d.latest.version });
+      badge.href = d.latest.url;
+      badge.title = tr('打开 {v} 的下载页面', { v: d.latest.version });
+    }
+  };
+  // 检查的结果：ms 毫秒后自己消失，0 是一直留着
+  const note = (text, level, ms = 0) => {
+    clearTimeout(timer);
+    msg.textContent = text;
+    msg.title = text;
+    msg.dataset.level = level;
+    if (ms) timer = setTimeout(() => note('', ''), ms);
+  };
+  const load = () =>
+    fetch('/api/update', { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => d && show(d))
+      .catch(() => {});
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    btn.classList.add('is-checking');
+    note(tr('正在检查更新…'), 'info');
+    try {
+      const r = await fetch('/api/update/check', { method: 'POST' });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+      show(d);
+      if (d.error) note(tr('检查更新失败：{error}', { error: d.error }), 'error', 15000);
+      else if (d.latest) note('', ''); // 旁边的“新版本 x.y.z”已经说明了
+      else note(tr('已是最新版本'), 'ok', 6000);
+    } catch (e) {
+      note(tr('检查更新失败：{error}', { error: e.message || e }), 'error', 15000);
+    } finally {
+      btn.disabled = false;
+      btn.classList.remove('is-checking');
+    }
+  });
+  document.addEventListener('visibilitychange', () => !document.hidden && load());
+  load();
+}
+
+// 时间范围那一条固定在顶部：滚到下面的显卡、CPU 图表时也能切换。贴住时下面画一条线，和内容分开
+function initSticky() {
+  const bar = document.querySelector('.filters');
+  const sentinel = h('div', { class: 'sticky-sentinel' });
+  bar.before(sentinel);
+  new IntersectionObserver(([e]) => bar.classList.toggle('is-stuck', !e.isIntersecting)).observe(sentinel);
+}
+
 initTheme();
 initRange();
+initSticky();
+initUpdate();
 connect();

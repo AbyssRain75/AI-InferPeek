@@ -2,7 +2,7 @@
 // 小窗模式（地址带 ?compact=1）不画进度条和折线，硬件只给数字，服务块去掉补充行。
 // 在桌面程序里运行时，window.pywebview.api 提供“隐藏”“打开完整看板”“按内容调整高度”“切换小窗模式”。
 
-import { GB, h, num, gb, rate, ratioOf, usageLevel, icon, when, elapsed, pushSample } from './ui.js';
+import { GB, h, num, gb, rate, ratioOf, usageLevel, percent, icon, when, elapsed, pushSample } from './ui.js';
 import {
   statusText,
   sessionSummary,
@@ -29,11 +29,13 @@ import {
   resultOf,
   staleAge,
   setGpuDevices,
+  setSampleInterval,
   gpuText,
   usedGpus,
   mainGpus,
 } from './runtimes.js';
 import { connectStream } from './stream.js';
+import { tr, followLanguage } from './i18n.js';
 
 const SPARK_SECONDS = 60;
 const params = new URLSearchParams(location.search);
@@ -53,11 +55,11 @@ if (theme === 'dark' || theme === 'light') document.documentElement.dataset.them
 // ---------- 硬件部分（结构固定，只更新数值） ----------
 
 // “空闲 xx GB”，读不到已用或总量时没有
-const freeText = (used, total) => (ratioOf(used, total) != null ? `空闲 ${gb(total - used)} GB` : null);
+const freeText = (used, total) => (ratioOf(used, total) != null ? tr('空闲 {v} GB', { v: gb(total - used) }) : null);
 
 // 只有核显时，“显存”其实是借用的内存（核显没有自己的显存），名字写成“共享显存（借用内存）”；
 // 小窗模式放不下，写“共享显存”。鼠标停上去看原因
-const BORROWED_TITLE = '核显没有自己的显存，用的是借来的内存（任务管理器里叫“GPU 内存”）';
+const BORROWED_TITLE = tr('核显无独立显存，使用借用的内存（任务管理器中称为“GPU 内存”）');
 
 // wide：名字放不进标签列（共享显存（借用内存）），名字和数值占一行，进度条放到下一行，和其他行的进度条对齐
 function row(label, { wide = false, title = null } = {}) {
@@ -83,7 +85,7 @@ function row(label, { wide = false, title = null } = {}) {
 const sub = () => h('div', { class: 'm-sub' });
 
 // 显卡的几行按主显卡生成（见 buildGpus），放在 CPU 前面
-const hw = { cpu: row('CPU'), cpuSub: sub(), mem: row('内存') };
+const hw = { cpu: row('CPU'), cpuSub: sub(), mem: row(tr('内存')) };
 const hwSection = h('section', { class: 'm-section m-hw' }, hw.cpu.el, hw.cpuSub, hw.mem.el);
 
 // 小窗模式：两列，左边百分比，右边用量；鼠标停上去看其余细节。wide：名字比“显存”长，不按固定宽度
@@ -100,7 +102,7 @@ function cell(label, { wide = false } = {}) {
   };
 }
 
-const cells = { cpu: cell('CPU'), mem: cell('内存') };
+const cells = { cpu: cell('CPU'), mem: cell(tr('内存')) };
 const compactSection = h('section', { class: 'm-section c-grid', hidden: true }, cells.cpu.el, cells.mem.el);
 
 // 每块主显卡一组：有独显时是所有独显，没有独显时是核显。只有一块时和以前一样叫“GPU”“显存”（核显是“共享显存（借用内存）”），
@@ -127,11 +129,11 @@ function buildGpus(devices) {
       multi,
       gpu: row(`GPU${tag}`),
       gpuSub: sub(),
-      spark: h('canvas', { class: 'm-spark', role: 'img', 'aria-label': multi ? `最近 60 秒显卡 ${tag} 利用率` : '最近 60 秒显卡利用率' }),
-      vram: borrowed ? row(`共享显存${tag}（借用内存）`, { wide: true, title: BORROWED_TITLE }) : row(`显存${tag}`),
+      spark: h('canvas', { class: 'm-spark', role: 'img', 'aria-label': multi ? tr('最近 60 秒显卡 {n} 利用率', { n: tag }) : tr('最近 60 秒显卡利用率') }),
+      vram: borrowed ? row(tr('共享显存{n}（借用内存）', { n: tag }), { wide: true, title: BORROWED_TITLE }) : row(tr('显存{n}', { n: tag })),
       vramSub: sub(),
       gpuCell: cell(`GPU${tag}`),
-      vramCell: borrowed ? cell(`共享显存${tag}`, { wide: true }) : cell(`显存${tag}`),
+      vramCell: borrowed ? cell(tr('共享显存{n}', { n: tag }), { wide: true }) : cell(tr('显存{n}', { n: tag })),
     };
     g.els = [g.gpu.el, g.gpuSub, g.spark, g.vram.el, g.vramSub, g.gpuCell.el, g.vramCell.el];
     hw.cpu.el.before(g.gpu.el, g.gpuSub, g.spark, g.vram.el, g.vramSub);
@@ -240,7 +242,7 @@ function updateCompact(s) {
       grp.gpuCell.set(`${num(g.util)}%`, g.temp != null ? ` ${g.temp}°C` : '', { title: [name, gpuDetail(g)].filter(Boolean).join('\n') });
       // 桌面程序本身也会用一点共享显存，超过 1 GB 才提示（通常是模型溢出）
       const shared = sharedVram(s, grp);
-      const detail = [freeText(g.mem_used, g.mem_total), shared > GB ? `共享显存 ${gb(shared)} GB` : null].filter(Boolean).join(' · ');
+      const detail = [freeText(g.mem_used, g.mem_total), shared > GB ? tr('共享显存 {v} GB', { v: gb(shared) }) : null].filter(Boolean).join(' · ');
       grp.vramCell.set(gb(g.mem_used), `/${gb(g.mem_total)}G`, {
         mark: usageLevel(ratioOf(g.mem_used, g.mem_total)) || (shared > GB ? 'warning' : null),
         title: [name, state.integrated ? BORROWED_TITLE : null, detail].filter(Boolean).join('\n'),
@@ -248,8 +250,11 @@ function updateCompact(s) {
     }
     grp.gpuCell.el.hidden = grp.vramCell.el.hidden = !g;
   }
-  if (s.cpu) cells.cpu.set(`${num(s.cpu.percent)}%`, s.cpu.temp != null ? ` ${num(s.cpu.temp)}°C` : '', { title: cpuDetail(s.cpu) });
-  if (s.mem) cells.mem.set(gb(s.mem.used), `/${gb(s.mem.total, 0)}G`, { mark: usageLevel(ratioOf(s.mem.used, s.mem.total)) });
+  // 这一次没采到（采集出错）时显示“—”，不停在上一次的数字上
+  const cpu = s.cpu || {};
+  const mem = s.mem || {};
+  cells.cpu.set(`${num(cpu.percent)}%`, cpu.temp != null ? ` ${num(cpu.temp)}°C` : '', { title: cpuDetail(cpu) });
+  cells.mem.set(gb(mem.used), `/${gb(mem.total, 0)}G`, { mark: usageLevel(ratioOf(mem.used, mem.total)) });
 }
 
 function updateFull(s) {
@@ -267,7 +272,7 @@ function updateFull(s) {
       const spill = shared > GB;
       grp.vramSub.replaceChildren(
         ...(spill ? [icon('warning')] : []),
-        [spill ? `共享显存 ${gb(shared)} GB` : null, freeText(g.mem_used, g.mem_total)].filter(Boolean).join(' · '),
+        [spill ? tr('共享显存 {v} GB', { v: gb(shared) }) : null, freeText(g.mem_used, g.mem_total)].filter(Boolean).join(' · '),
       );
       drawSpark(
         grp.spark,
@@ -279,11 +284,12 @@ function updateFull(s) {
     grp.gpu.el.hidden = grp.gpuSub.hidden = grp.spark.hidden = grp.vram.el.hidden = grp.vramSub.hidden = !g;
   }
 
-  if (s.cpu) {
-    hw.cpu.set(ratioOf(s.cpu.percent, 100), num(s.cpu.percent), '%');
-    hw.cpuSub.textContent = cpuDetail(s.cpu);
-  }
-  if (s.mem) hw.mem.set(ratioOf(s.mem.used, s.mem.total), gb(s.mem.used), ` / ${gb(s.mem.total, 0)} GB`, { level: true });
+  // 这一次没采到时显示“—”，见 updateCompact
+  const cpu = s.cpu || {};
+  const mem = s.mem || {};
+  hw.cpu.set(ratioOf(cpu.percent, 100), num(cpu.percent), '%');
+  hw.cpuSub.textContent = cpuDetail(cpu);
+  hw.mem.set(ratioOf(mem.used, mem.total), gb(mem.used), ` / ${gb(mem.total, 0)} GB`, { level: true });
 }
 
 // ---------- 模型服务（每次重建，节点很少） ----------
@@ -305,61 +311,68 @@ function ollamaBody(r) {
   const prompt = ms.find((m) => m.state === 'prompt');
   const loading = ms.find((m) => m.state === 'loading');
   const last = (r.requests || [])[0];
-  const lastText = last ? `上次 ${num(rate(last.gen_tokens, last.gen_ms), 1)} tokens/s · ${num(last.gen_tokens)} tokens` : '还没有请求记录';
-  if (gen) return [main(r.speed != null ? num(r.speed, 1) : '—', 'tokens/s', gen.name), `已生成 ${num(gen.n_decoded)} tokens`];
-  if (prompt) return [main(null, null, `${prompt.name} · 正在处理提示词`), lastText];
-  if (loading) return [main(null, null, `正在加载 ${loading.name}`), lastText];
+  const lastText = last
+    ? tr('上次 {speed} tokens/s · {n} tokens', { speed: num(rate(last.gen_tokens, last.gen_ms), 1), n: num(last.gen_tokens) })
+    : tr('暂无请求记录');
+  // “上下文 8.2%”：空闲时是模型还留着的上一段对话占的；读不到时是 null
+  const ctxText = (m) => {
+    const ratio = ratioOf(m.context, m.context_window);
+    return ratio != null ? tr('上下文 {pct}', { pct: percent(ratio) }) : null;
+  };
+  if (gen) return [main(r.speed != null ? num(r.speed, 1) : '—', 'tokens/s', gen.name), [tr('已生成 {n} tokens', { n: num(gen.n_decoded) }), ctxText(gen)].filter(Boolean).join(' · ')];
+  if (prompt) return [main(null, null, [`${prompt.name} · ${tr('正在处理提示词')}`, ctxText(prompt)].filter(Boolean).join(' · ')), lastText];
+  if (loading) return [main(null, null, tr('正在加载 {name}', { name: loading.name })), lastText];
   if (ms.length) {
     const m = ms[0];
     const gpu = gpuShareText(m.gpu_ratio);
-    const extra = ms.length > 1 ? `（共 ${ms.length} 个）` : '';
-    return [main(null, null, [m.name + extra, gpu, unloadText(m.expires)].filter(Boolean).join(' · ')), lastText];
+    const extra = ms.length > 1 ? tr('（共 {n} 个）', { n: ms.length }) : '';
+    return [main(null, null, [m.name + extra, gpu, ctxText(m), unloadText(m.expires)].filter(Boolean).join(' · ')), lastText];
   }
-  return [main(null, null, '未加载模型'), lastText];
+  return [main(null, null, tr('未加载模型')), lastText];
 }
 
 function comfyBody(r) {
   const q = r.queue || {};
-  const pending = q.pending ? ` · 排队 ${q.pending}` : '';
-  const secs = (ms) => (ms == null ? '—' : `${num(ms / 1000, 1)} 秒`);
-  const subText = `上次 ${secs(r.last_duration)} · 平均 ${secs(r.avg_duration)}`;
+  const pending = q.pending ? ` · ${tr('排队 {n}', { n: q.pending })}` : '';
+  const secs = (ms) => (ms == null ? '—' : tr('{n} 秒', { n: num(ms / 1000, 1) }));
+  const subText = tr('上次 {last} · 平均 {avg}', { last: secs(r.last_duration), avg: secs(r.avg_duration) });
   if (r.current) {
     // 已运行的秒数后面跟正在用的模型，鼠标停上去能看到 LoRA 等其余模型
     const sec = r.current.elapsed != null ? Math.floor(r.current.elapsed / 1000) : null;
     const m = r.job_models?.current ? comfyModels(r)[0] : null;
     const title = m ? [m.title, m.detail].filter(Boolean).join('\n') : null;
-    return [main(sec != null ? String(sec) : '—', '秒', m ? m.name : '已运行', title), `${subText}${pending}`];
+    return [main(sec != null ? String(sec) : '—', tr('秒'), m ? m.name : tr('已运行'), title), `${subText}${pending}`];
   }
-  return [main(null, null, `空闲${pending}`), subText];
+  return [main(null, null, `${tr('空闲')}${pending}`), subText];
 }
 
 // 命令行工具：进行中的会话数、输出速度和它们用的模型，下面一行是在等你操作的会话或正在工作的会话（额度另起一行，见 quotaLine）
 function agentBody(r) {
   const list = r.sessions || [];
   const active = list.filter((s) => s.status !== 'idle');
-  const names = (status) => list.filter((s) => s.status === status).map((s) => s.name).join('、');
-  const models = [...new Set(active.map((s) => s.model).filter(Boolean))].join('、');
+  const names = (status) => list.filter((s) => s.status === status).map((s) => s.name).join(tr('、'));
+  const models = [...new Set(active.map((s) => s.model).filter(Boolean))].join(tr('、'));
   // 速度是各会话之和，多个会话进行中时注明“共”；放在模型名前面，窗口窄时截掉的是模型名
-  const speed = r.speed > 0 ? `${active.length > 1 ? '共 ' : ''}${num(r.speed, 1)} tokens/s` : null;
+  const speed = r.speed > 0 ? (active.length > 1 ? tr('共 {n} tokens/s', { n: num(r.speed, 1) }) : `${num(r.speed, 1)} tokens/s`) : null;
   const body = active.length
-    ? main(String(active.length), '个进行中', [speed, models].filter(Boolean).join(' · '))
-    : main(null, null, list.length ? '全部空闲' : `${recentText(r)}无会话记录`);
+    ? main(String(active.length), tr('个进行中'), [speed, models].filter(Boolean).join(' · '))
+    : main(null, null, list.length ? tr('全部空闲') : r.recent ? tr('{recent}无会话记录', { recent: recentText(r) }) : tr('无正在运行的会话'));
   const last = Math.max(0, ...list.map((s) => s.last || 0));
-  const subText = names('waiting') ? `等你操作：${names('waiting')}` : names('busy') || (last ? `上次活动 ${when(last)}` : '');
+  const subText = names('waiting') ? tr('等你操作：{names}', { names: names('waiting') }) : names('busy') || (last ? tr('上次活动 {time}', { time: when(last) }) : '');
   return [body, subText];
 }
 
-// 额度的各项：5 小时、每周（Codex、Claude Code），或按模型分的组（Antigravity，用得最多的在前，放不下时截掉的是用得少的）
+// 额度的各项：5 小时、每周（Codex、Claude Code），或按模型分的组（Antigravity、WorkBuddy，用得最多的在前，放不下时截掉的是用得少的）
 function quotaItems(r, now) {
   const pools = livePools(r, now);
   if (pools.length) {
     return [...pools].sort((a, b) => b.used - a.used).map((p) => ({ short: poolName(p), full: poolName(p, { full: true }), used: p.used, resets: p.resets }));
   }
-  return liveLimits(r, now).map((w) => ({ short: limitName(w.window).replace(/额度$/, ''), full: limitName(w.window), used: w.used, resets: w.resets }));
+  return liveLimits(r, now).map((w) => ({ short: limitName(w.window, { short: true }), full: limitName(w.window), used: w.used, resets: w.resets }));
 }
 
 // 额度一行：“额度 5 小时 23% · 每周 4%”，快用完时前面带提醒图标；鼠标停上去看重置时间。
-// Claude Code、Antigravity 的标上 Beta，Claude Code 的是桌面版记下的，还写是多久以前的记录。
+// Claude Code、Antigravity、WorkBuddy 的标上 Beta，Claude Code 的是桌面版记下的，还写是多久以前的记录。
 // named：空闲的工具不显示块，这一行开头写工具名字
 function quotaLine(r, now, { named = false } = {}) {
   const items = quotaItems(r, now);
@@ -367,11 +380,11 @@ function quotaLine(r, now, { named = false } = {}) {
   const lim = r.limits;
   const beta = isBetaLimits(lim);
   const desktop = lim.source === 'claude-desktop';
-  const text = [items.map((x) => `${x.short} ${num(x.used)}%`).join(' · '), desktop ? `${recordAge(now - lim.t)}记录` : null].filter(Boolean).join(' · ');
-  const reset = (x) => (x.resets ? `，${when(x.resets)} 重置` : '');
+  const text = [items.map((x) => `${x.short} ${num(x.used)}%`).join(' · '), desktop ? tr('{age}记录', { age: recordAge(now - lim.t) }) : null].filter(Boolean).join(' · ');
+  const reset = (x) => (x.resets ? tr('，{time} 重置', { time: when(x.resets) }) : '');
   const title = [
-    ...items.map((x) => `${x.full} 已用 ${num(x.used)}%${reset(x)}`),
-    desktop ? `桌面版记录时间：${when(lim.t)}` : null,
+    ...items.map((x) => `${tr('{name} 已用 {pct}%', { name: x.full, pct: num(x.used) })}${reset(x)}`),
+    desktop ? tr('桌面版记录时间：{time}', { time: when(lim.t) }) : null,
     betaText(lim) || null,
   ]
     .filter(Boolean)
@@ -382,7 +395,7 @@ function quotaLine(r, now, { named = false } = {}) {
     { class: named ? 'rt-sub rt-quota m-quota' : 'rt-sub rt-quota', title },
     ...(mark ? [icon(mark)] : []),
     named ? h('span', { class: 'rt-quota-name', text: r.label }) : null,
-    '额度',
+    tr('额度'),
     beta ? betaTag(lim) : null,
     ` ${text}`,
   );
@@ -403,14 +416,14 @@ function balanceLine(r, now, { named = false } = {}) {
   const unit = currencyUnit(b.currency);
   const low = balanceLow(b);
   const parts = [
-    `余额 ${money(b.amount)} ${unit}`,
-    low ? `低于预警 ${money(b.warn)} ${unit}` : null,
-    b.today != null ? `今天已用 ${money(b.today)} ${unit}` : null,
-    now - b.t > BALANCE_FRESH_MS ? `${recordAge(now - b.t)}查询` : null,
+    tr('余额 {amount} {unit}', { amount: money(b.amount), unit }),
+    low ? tr('低于预警 {amount} {unit}', { amount: money(b.warn), unit }) : null,
+    b.today != null ? tr('今天已用 {amount} {unit}', { amount: money(b.today), unit }) : null,
+    now - b.t > BALANCE_FRESH_MS ? tr('{age}查询', { age: recordAge(now - b.t) }) : null,
   ].filter(Boolean);
   return h(
     'div',
-    { class: named ? 'rt-sub rt-quota rt-wrap m-quota' : 'rt-sub rt-quota rt-wrap', title: `余额查询时间：${when(b.t)}\n${BALANCE_NOTE}` },
+    { class: named ? 'rt-sub rt-quota rt-wrap m-quota' : 'rt-sub rt-quota rt-wrap', title: `${tr('余额查询时间：{time}', { time: when(b.t) })}\n${BALANCE_NOTE}` },
     ...(low ? [icon('warning')] : []),
     named ? h('span', { class: 'rt-quota-name nowrap', text: r.label }) : null,
     ...joinParts(parts),
@@ -421,20 +434,21 @@ function balanceLine(r, now, { named = false } = {}) {
 function doneLines(r, now) {
   return recentDone(r)
     .slice(0, 1)
-    .map((e) => h('div', { class: 'rt-done', 'data-done': r.id, title: '点击关闭提示' }, icon(resultOf(e).icon), doneText(e, now, { short: true })));
+    .map((e) => h('div', { class: 'rt-done', 'data-done': r.id, title: tr('点击关闭提示') }, icon(resultOf(e).icon), doneText(e, now, { short: true })));
 }
 
 // 多久没更新，取整到秒、分钟或小时，悬浮窗里要短
-const shortAgo = (ms) => (ms < 60000 ? `${Math.floor(ms / 1000)} 秒` : ms < 3600000 ? `${Math.floor(ms / 60000)} 分钟` : `${Math.floor(ms / 3600000)} 小时`);
+const shortAgo = (ms) =>
+  ms < 60000 ? tr('{n} 秒', { n: Math.floor(ms / 1000) }) : ms < 3600000 ? tr('{n} 分钟', { n: Math.floor(ms / 60000) }) : tr('{n} 小时', { n: Math.floor(ms / 3600000) });
 
 // 名字后面的显卡短名字，鼠标停上去看完整名字；Ollama 的模型全在 CPU 上时写 CPU。命令行工具的模型在云端，不标
 function gpuTag(r, sample) {
   if (r.category === 'cli') return null;
   const gpus = usedGpus(sample.procs, r);
   const text = gpuText(gpus);
-  if (text) return h('span', { class: 'rt-gpu', text, title: `运行在 ${gpuText(gpus, { full: true })}` });
+  if (text) return h('span', { class: 'rt-gpu', text, title: tr('运行在 {name}', { name: gpuText(gpus, { full: true }) }) });
   const ms = r.models || [];
-  if (ms.length && ms.every((m) => m.gpu_ratio != null && m.gpu_ratio <= 0)) return h('span', { class: 'rt-gpu', text: 'CPU', title: '模型全在 CPU 上' });
+  if (ms.length && ms.every((m) => m.gpu_ratio != null && m.gpu_ratio <= 0)) return h('span', { class: 'rt-gpu', text: 'CPU', title: tr('模型均在 CPU 上') });
   return null;
 }
 
@@ -442,7 +456,9 @@ function gpuTag(r, sample) {
 function rtBlock(r, sample, { doneOnly = false } = {}) {
   const status = r.status || 'idle';
   const cli = r.category === 'cli';
-  const label = cli && status !== 'idle' ? sessionSummary(r.sessions || []) : statusText(r.kind, status);
+  // 命令行工具工作中、等你操作时写会话概括；读取出错、连不上、启动中照常写状态，不写成“无会话”
+  const label = cli && (status === 'busy' || status === 'waiting') ? sessionSummary(r.sessions || []) : statusText(r.kind, status);
+  const failed = status === 'offline' || status === 'error';
   // 数据过期（轮询很慢或卡住）时在名字这一行右边标出多久没更新，块里的数字变淡
   const age = staleAge(r, sample.t);
   const head = h(
@@ -450,21 +466,36 @@ function rtBlock(r, sample, { doneOnly = false } = {}) {
     { class: 'rt-head' },
     h('span', { class: 'rt-name', text: r.label }),
     gpuTag(r, sample),
-    h('span', { class: 'rt-state', 'data-status': status }, h('span', { class: 'chip-dot' }), label),
-    age ? h('span', { class: 'rt-stale', title: `数据已过期，最后一次更新在 ${elapsed(age)}前` }, icon('warning'), `${shortAgo(age)}未更新`) : null,
+    h('span', { class: 'rt-state', 'data-status': status, title: failed && r.error ? r.error : null }, h('span', { class: 'chip-dot' }), label),
+    age
+      ? h('span', { class: 'rt-stale', title: tr('数据已过期，最后一次更新在 {time}前', { time: elapsed(age) }) }, icon('warning'), tr('{time}未更新', { time: shortAgo(age) }))
+      : null,
   );
   const cls = age ? 'rt is-stale' : 'rt';
   // 小窗模式只显示数字，不显示余额和额度
   const quota = state.compact ? [] : [balanceLine(r, sample.t), quotaLine(r, sample.t)];
   if (doneOnly) return h('div', { class: cls }, head, ...doneLines(r, sample.t), ...quota);
-  const [body, subText] = r.kind === 'ollama' ? ollamaBody(r) : r.kind === 'comfyui' ? comfyBody(r) : cli ? agentBody(r) : [null, ''];
+  // 连不上、读取出错时块里写原因（太长截断，鼠标停上去看全部）；启动中还没有数据，不写“未加载模型”“无会话记录”这类
+  const [body, subText] = failed
+    ? [main(null, null, r.error || statusText(r.kind, status), r.error), '']
+    : status === 'starting'
+      ? [null, '']
+      : r.kind === 'ollama'
+        ? ollamaBody(r)
+        : r.kind === 'comfyui'
+          ? comfyBody(r)
+          : cli
+            ? agentBody(r)
+            : [null, ''];
   if (state.compact) return h('div', { class: cls }, head, body, ...doneLines(r, sample.t));
   const res = sample.procs?.owners?.[r.id];
   const resText = !res
     ? null
     : cli
-      ? `内存 ${gb(res.mem)} GB · CPU ${num(res.cpu)}%`
-      : [`显存 ${gb(res.vram)} GB`, res.shared > GB / 4 ? `共享 ${gb(res.shared)} GB` : null, `内存 ${gb(res.mem)} GB`].filter(Boolean).join(' · ');
+      ? `${tr('内存 {v} GB', { v: gb(res.mem) })} · CPU ${num(res.cpu)}%`
+      : [tr('显存 {v} GB', { v: gb(res.vram) }), res.shared > GB / 4 ? tr('共享 {v} GB', { v: gb(res.shared) }) : null, tr('内存 {v} GB', { v: gb(res.mem) })]
+          .filter(Boolean)
+          .join(' · ');
   return h(
     'div',
     { class: cls },
@@ -480,7 +511,7 @@ function rtBlock(r, sample, { doneOnly = false } = {}) {
 function updateRuntimes(s) {
   const list = s.runtimes || [];
   if (!list.length) {
-    rtSection.replaceChildren(h('div', { class: 'm-empty', text: '未检测到模型服务或命令行工具' }));
+    rtSection.replaceChildren(h('div', { class: 'm-empty', text: tr('未检测到模型服务或命令行工具') }));
     return;
   }
   // 活跃的完整显示；空闲但刚完成过任务的只显示完成提示；其余空闲的只在最后一行列出名字。
@@ -492,7 +523,7 @@ function updateRuntimes(s) {
   blocks.push(...rest.filter((r) => recentDone(r).length).map((r) => rtBlock(r, s, { doneOnly: true })));
   const idle = rest.filter((r) => !recentDone(r).length);
   // 窗口窄放不下时在名字之间换行，名字本身不拆开
-  if (idle.length) blocks.push(h('div', { class: 'm-idle' }, h('span', { class: 'chip-dot' }), h('span', {}, '空闲：', ...joinParts(idle.map((r) => r.label)))));
+  if (idle.length) blocks.push(h('div', { class: 'm-idle' }, h('span', { class: 'chip-dot' }), h('span', {}, tr('空闲：'), ...joinParts(idle.map((r) => r.label)))));
   // 空闲的工具没有块，有余额、额度的在空闲那一行下面各占一行
   if (!state.compact) {
     blocks.push(...idle.flatMap((r) => [balanceLine(r, s.t, { named: true }), quotaLine(r, s.t, { named: true })]).filter(Boolean));
@@ -533,19 +564,22 @@ function setDeviceName(name) {
 const stream = connectStream({
   onInit(data) {
     setGpuDevices(data.info.gpus?.devices);
+    setSampleInterval(data.info.interval);
     buildGpus(data.info.gpus?.devices || []);
     const last = data.history[data.history.length - 1];
     const keep = last ? last.t - (SPARK_SECONDS + 5) * 1000 : 0;
     state.history = data.history.filter((s) => s.t >= keep);
     if (last) setDeviceName(last.device?.name || null);
+    followLanguage(last);
   },
   onSample(s) {
     pushSample(state.history, s, (SPARK_SECONDS + 5) * 1000);
     setDeviceName(s.device?.name || null);
+    followLanguage(s); // 设置里改了界面语言时重新加载（地址里记着小窗模式，见 setCompact）
   },
   render,
   hidden,
-  downText: '已断开',
+  downText: tr('已断开'),
 });
 
 // 桌面程序隐藏、显示悬浮窗时调用（显示前先调，窗口一出来就是最新的）
@@ -573,7 +607,12 @@ function setCompact(on) {
   hwSection.hidden = on;
   compactSection.hidden = !on;
   compactBtn.setAttribute('aria-pressed', String(on));
-  compactBtn.title = on ? '切换为完整悬浮窗' : '小窗模式：仅显示核心数字';
+  compactBtn.title = on ? tr('切换为完整悬浮窗') : tr('小窗模式：仅显示核心数字');
+  // 记在地址上：刷新（比如换了界面语言）后保持；桌面程序换主题时按自己保存的设置重新打开
+  const url = new URL(location.href);
+  if (on) url.searchParams.set('compact', '1');
+  else url.searchParams.delete('compact');
+  history.replaceState(null, '', url);
   render();
 }
 window.setCompact = setCompact; // 托盘菜单切换时由桌面程序调用
@@ -581,15 +620,7 @@ setCompact(state.compact);
 
 compactBtn.addEventListener('click', () => {
   setCompact(!state.compact);
-  if (api()?.set_compact) {
-    api().set_compact(state.compact); // 桌面程序保存设置、改窗口宽度
-  } else {
-    // 浏览器里直接打开时记在地址上，刷新后保持
-    const url = new URL(location.href);
-    if (state.compact) url.searchParams.set('compact', '1');
-    else url.searchParams.delete('compact');
-    history.replaceState(null, '', url);
-  }
+  api()?.set_compact?.(state.compact); // 桌面程序保存设置、改窗口宽度
 });
 // 宽度变了内容会重新换行，马上按新高度调整窗口
 window.addEventListener('resize', fitWindow);

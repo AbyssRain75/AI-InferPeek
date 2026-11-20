@@ -14,14 +14,30 @@ import webview
 from webview.window import FixPoint
 
 from .. import __version__
+from .. import i18n
 from ..config import FROZEN
+from ..i18n import tr
 from ..icon import make_icon_image
 from .settings import COMPACT_WIDTH, DOCKS, OPACITIES, THEMES, WIDTHS
-from .system import APP_NAME, IDYES, MB_ICONWARNING, MB_YESNO, autostart_enabled, message_box, set_autostart, system_dark
+from .system import (
+    APP_NAME,
+    IDYES,
+    MB_ICONINFORMATION,
+    MB_ICONWARNING,
+    MB_SETFOREGROUND,
+    MB_YESNO,
+    autostart_enabled,
+    message_box,
+    set_autostart,
+    system_dark,
+)
+from ..update import RELEASES_PAGE, UpdateChecker, UpdateError
 from .win32 import (
     SWP_NOACTIVATE,
     SWP_NOSIZE,
     SWP_NOZORDER,
+    WM_ENDSESSION,
+    WM_QUERYENDSESSION,
     apply_window_style,
     bring_to_front,
     hide_from_taskbar,
@@ -39,6 +55,9 @@ WINDOW_TITLE = "AI InferPeek 悬浮窗"
 MAIN_SIZE = (1280, 860)  # 看板窗口的默认大小（逻辑像素），屏幕放不下时缩小
 MINI_MIN_SIZE = (200, 80)  # 悬浮窗最小的大小（逻辑像素）
 MINI_MARGIN = 24  # 悬浮窗默认放在主屏右上角，离右边和上边的距离（逻辑像素）
+# WinForms 的关闭原因（System.Windows.Forms.CloseReason）：关机、重启、注销，或者安装程序通过重启管理器要求关掉程序。
+# 按名字比，不用为了一个枚举值在这里加载 .NET
+SESSION_END_REASON = "WindowsShutDown"
 
 log = logging.getLogger("aiinferpeek")
 
@@ -151,10 +170,17 @@ class DesktopApp:
         self.hwnd = None
         self.height = 360
         self.quitting = False
+        self.session_ending = False  # 正在关的窗口是不是因为系统要关机、重启、注销，见 watch_session_end()
         self.main = None  # 看板窗口（完整看板和设置页面），关掉后是 None，下次打开再建
         self.main_page = None  # 看板窗口里现在是哪个页面："" 是看板，"settings.html" 是设置
         self.main_lock = threading.Lock()
         self.unsaved = False
+        # 检查新版本：main() 建好托盘后 start()，自动检查查到新版本时弹通知；查到的新版本变了（查到新的、撤回了）时托盘菜单跟着换。
+        # 看板服务也用它（看板顶栏的“检查更新”），在页面上查到的托盘菜单里也有
+        self.updates = UpdateChecker(lambda: self.settings["check_update"], self._on_update_found, on_change=self.refresh_menu)
+        self.checking = threading.Lock()  # 手动检查更新同时只跑一个，连点几下不会弹出好几个框
+        # 设置页面里换了界面语言：托盘菜单跟着换（看板和悬浮窗的页面自己重新加载）
+        i18n.on_change(lambda _: self.refresh_menu())
 
     # 窗口
 
@@ -198,6 +224,7 @@ class DesktopApp:
                 move(x, y)
 
         self.window.move = drag_move
+        self.window.events.before_show += self.watch_session_end
         self.window.events.shown += self._on_shown
         self.window.events.loaded += self._on_loaded
         self.window.events.moved += self._on_moved
@@ -260,12 +287,74 @@ class DesktopApp:
         self.settings.save()
 
     def _on_closing(self):
-        # Alt+F4 之类只隐藏，真正退出走托盘菜单。这个事件在界面线程里同步执行，隐藏要交给别的线程：
+        # Alt+F4 之类只隐藏，真正退出走托盘菜单；关机、重启、注销时不拦着（不然系统会提示本程序阻止关机）。
+        # 这个事件在界面线程里同步执行，隐藏要交给别的线程：
         # set_visible() 用 evaluate_js 通知页面，会等界面线程送回结果，在界面线程上等就卡死了
-        if self.quitting:
+        if self.quitting or self.session_ending:
             return True
         threading.Thread(target=self.set_visible, args=(False,), name="hide", daemon=True).start()
         return False
+
+    # 关机、重启、注销：系统问能不能结束时（WM_QUERYENDSESSION）悬浮窗、看板窗口、托盘都答应，不隐藏、不弹框；
+    # 真的要结束时（WM_ENDSESSION）按退出处理，见 end_session()
+
+    def watch_session_end(self, window):
+        """悬浮窗、看板窗口的 before_show 事件（界面线程，窗体刚建好）：看关闭原因，认出关机、重启、注销。
+
+        pywebview 的 closing 事件不带关闭原因。WinForms 收到 WM_QUERYENDSESSION 和 WM_CLOSE 时先触发旧的 Closing 事件，
+        再触发 pywebview 用的 FormClosing（由它调 _on_closing、_on_main_closing）；收到 WM_ENDSESSION 时先触发 Closed，
+        再触发 FormClosed。Closing、Closed 带着同一个关闭原因，在这里先记下来。
+        """
+        try:
+            form = window.native
+            form.Closing += self._on_form_closing
+            form.Closed += self._on_form_closed
+        except Exception:
+            log.exception("监听关机消息失败，关机时可能要手动结束本程序")
+
+    def _on_form_closing(self, sender, args):
+        # 每次关窗口（包括系统来问能不能关机）都先到这里，接着就是 _on_closing 或 _on_main_closing。
+        # 关机被别的程序取消了也没关系：之后再关窗口时这里会重新记
+        self.session_ending = str(args.CloseReason) == SESSION_END_REASON
+
+    def _on_form_closed(self, sender, args):
+        # 收到 WM_ENDSESSION 并且真的要关机时才是这个原因；关机被取消（wParam 为 0）时 WinForms 不触发 Closed
+        if str(args.CloseReason) == SESSION_END_REASON:
+            self.end_session()
+
+    def end_session(self):
+        """系统真的要关机、重启、注销了：按退出处理，马上把设置写盘。
+
+        处理完 WM_ENDSESSION 系统随时会结束进程，main() 最后的收尾不一定来得及，要紧的在这里先做。
+        窗口由 WinForms、pywebview 接着关（最后一个关掉时 webview.start() 返回）；托盘这里停掉（没有 WebView2、只有托盘时
+        icon.run() 这样才会返回），之后 main() 照常收尾。
+        """
+        try:
+            if not self.quitting:
+                log.info("系统正在关机、重启或注销，退出")
+            self.quitting = True
+            self.settings.flush()
+            self.stop_tray()
+        except Exception:
+            log.exception("关机时退出出错")
+
+    def _on_tray_query_end_session(self, wparam, lparam):
+        # pystray 的隐藏窗口对它自己不处理的消息一律回 0，WM_QUERYENDSESSION 回 0 就是“不行”，会拦住关机
+        return 1
+
+    def _on_tray_end_session(self, wparam, lparam):
+        if wparam:  # 0 是关机被取消了
+            self.end_session()
+        return 0
+
+    def watch_tray_session_end(self):
+        """托盘图标的隐藏窗口也会收到关机消息，在 pystray 的消息表里加上这两条。"""
+        handlers = getattr(self.icon, "_message_handlers", None)
+        if handlers is None:
+            log.warning("托盘图标没有消息表（pystray 改了内部实现？），关机时可能要手动结束本程序")
+            return
+        handlers[WM_QUERYENDSESSION] = self._on_tray_query_end_session
+        handlers[WM_ENDSESSION] = self._on_tray_end_session
 
     def apply_style(self):
         if self.hwnd:
@@ -349,6 +438,7 @@ class DesktopApp:
             text_select=True,  # 会话标题、目录、设置里的路径要能选中复制
             background_color="#0d0d0d" if system_dark() else "#f9f9f7",  # 和页面底色一样，打开时不闪白
         )
+        main.events.before_show += self.watch_session_end
         main.events.loaded += self._on_main_loaded
         main.events.closing += self._on_main_closing
         return main
@@ -371,18 +461,23 @@ class DesktopApp:
 
     def _on_main_closing(self, window):
         # 在界面线程里同步调用，返回 False 取消关闭；退出时 quit() 已经问过了
-        if self.unsaved and not self.quitting and not self.confirm_discard(window, "关闭窗口"):
+        if self.session_ending and not self.quitting:
+            # 系统在问能不能关机：答应，不问没保存的修改（问了会卡住关机）。窗口这时还没关，关机也可能被别的程序取消，
+            # 所以 self.main 不动；真关机时 end_session() 之后会以退出的身份再来一次
+            if self.unsaved:
+                log.info("系统正在关机、重启或注销，设置页面上没保存的修改不保存")
+            return True
+        if self.unsaved and not self.quitting and not self.confirm_discard(window, tr("设置页面上有未保存的修改，关闭窗口后这些修改将会丢失。\n\n确定要关闭窗口吗？")):
             return False
         if self.main is window:
             self.main, self.main_page, self.unsaved = None, None, False
         return True
 
-    def confirm_discard(self, window, action):
+    def confirm_discard(self, window, text):
         try:
             owner = window.native.Handle.ToInt64()
         except Exception:
             owner = None
-        text = f"设置页面上有未保存的修改，{action}后这些修改将会丢失。\n\n确定要{action}吗？"
         return message_box(text, MB_YESNO | MB_ICONWARNING, owner) == IDYES
 
     # 托盘菜单动作
@@ -452,11 +547,81 @@ class DesktopApp:
             set_autostart(not autostart_enabled())
         except OSError:
             log.exception("修改开机启动失败")
-            message_box("修改开机自动启动失败，详情见日志。")
+            message_box(tr("修改开机自动启动失败，详情见日志。"))
+
+    # 检查更新：只提醒、打开发布页面，不自动下载和替换文件，见 update.py
+
+    def toggle_check_update(self, *_):
+        self.settings["check_update"] = not self.settings["check_update"]
+        self.settings.save()
+        if self.settings["check_update"]:
+            self.updates.wake()  # 刚打开就查一次
+
+    def update_label(self, *_):
+        latest = self.updates.latest
+        return tr("下载新版本 {v}...", v=latest[0]) if latest else ""
+
+    def open_update(self, *_):
+        latest = self.updates.latest
+        webbrowser.open(latest[1] if latest else RELEASES_PAGE)
+
+    def _on_update_found(self, version, url):
+        # 自动检查查到新版本（在检查线程里；托盘菜单里的“下载新版本”由 on_change 加上）：通知同一个版本只弹一次，重启后也不再弹
+        if self.settings["update_notified"] == version:
+            return
+        self.settings["update_notified"] = version
+        self.settings.save()
+        self.notify(tr("发现新版本 {new}（当前为 {current}），在托盘菜单中点击“下载新版本”可打开下载页面。", new=version, current=__version__))
+
+    def notify(self, text):
+        icon = self.icon
+        if not (icon and icon.HAS_NOTIFICATION):
+            return
+        try:
+            icon.notify(text, APP_NAME)
+        except Exception:
+            log.exception("弹出通知失败")
+
+    def check_update_now(self, *_):
+        # 托盘菜单的回调在托盘线程里，联网要等一会儿，放到别的线程，免得托盘菜单卡住
+        threading.Thread(target=self._check_update_now, name="check-update", daemon=True).start()
+
+    def _check_update_now(self):
+        if not self.checking.acquire(blocking=False):
+            return  # 上一次还没查完
+        try:
+            try:
+                found = self.updates.check(quiet=True)
+            except UpdateError as exc:
+                message_box(
+                    tr("检查更新失败：{error}。\n\n请稍后重试，也可直接打开发布页面查看：\n{url}", error=exc, url=RELEASES_PAGE),
+                    MB_ICONWARNING | MB_SETFOREGROUND,
+                )
+                return
+            if not found:
+                message_box(tr("已是最新版本（{v}）。", v=__version__), MB_ICONINFORMATION | MB_SETFOREGROUND)
+                return
+            version, url = found
+            self.settings["update_notified"] = version  # 这里已经告诉过了，自动检查不再弹通知
+            self.settings.save()
+            text = tr(
+                "发现新版本 {new}（当前为 {current}）。\n\n是否打开下载页面？\n\n"
+                "下载后请先在托盘菜单中退出本程序，再用新解压的 AIInferPeek 文件夹整体替换旧文件夹；"
+                "若 exe 旁放有 aiinferpeek.json，请将其复制到新文件夹中。",
+                new=version,
+                current=__version__,
+            )
+            if message_box(text, MB_YESNO | MB_ICONINFORMATION | MB_SETFOREGROUND) == IDYES:
+                webbrowser.open(url)
+        except Exception:
+            log.exception("检查更新出错")
+            message_box(tr("检查更新出错，详情见日志。"), MB_ICONWARNING | MB_SETFOREGROUND)
+        finally:
+            self.checking.release()
 
     def quit(self, *_):
         main = self.main
-        if main and self.unsaved and not self.confirm_discard(main, "退出"):
+        if main and self.unsaved and not self.confirm_discard(main, tr("设置页面上有未保存的修改，退出后这些修改将会丢失。\n\n确定要退出吗？")):
             return
         self.quitting = True
         self.stop_tray()
@@ -484,43 +649,69 @@ class DesktopApp:
             self.icon.update_menu()
 
     def build_tray(self):
+        # 菜单项的文字都是函数：换了界面语言后 refresh_menu() 重建菜单时按新的语言显示
         st = self.settings
         set_menu_theme(st["theme"])
         Item, Menu = pystray.MenuItem, pystray.Menu
         if self.window:
             items = [
-                Item("显示悬浮窗", self.toggle_visible, checked=lambda _: st["visible"], default=True),
-                Item("打开完整看板", lambda *_: self.open_dashboard()),
-                Item("设置...", lambda *_: self.open_settings()),
-                Item("小窗模式", self.toggle_compact, checked=lambda _: st["compact"]),
+                Item(lambda _: tr("显示悬浮窗"), self.toggle_visible, checked=lambda _: st["visible"], default=True),
+                Item(lambda _: tr("打开完整看板"), lambda *_: self.open_dashboard()),
+                Item(lambda _: tr("设置..."), lambda *_: self.open_settings()),
+                Item(lambda _: tr("小窗模式"), self.toggle_compact, checked=lambda _: st["compact"]),
                 Menu.SEPARATOR,
-                Item("总在最前", self.toggle_on_top, checked=lambda _: st["on_top"]),
+                Item(lambda _: tr("总在最前"), self.toggle_on_top, checked=lambda _: st["on_top"]),
                 Item(
-                    "吸附",
-                    Menu(*(Item(name, self.set_dock(k), checked=lambda _, k=k: st["dock"] == k, radio=True) for k, name in DOCKS.items())),
+                    lambda _: tr("吸附"),
+                    Menu(
+                        *(
+                            Item(lambda _, name=name: tr(name), self.set_dock(k), checked=lambda _, k=k: st["dock"] == k, radio=True)
+                            for k, name in DOCKS.items()
+                        )
+                    ),
                 ),
-                Item("鼠标穿透", self.toggle_click_through, checked=lambda _: st["click_through"]),
+                Item(lambda _: tr("鼠标穿透"), self.toggle_click_through, checked=lambda _: st["click_through"]),
                 Item(
-                    "透明度",
+                    lambda _: tr("透明度"),
                     Menu(*(Item(f"{v}%", self.set_opacity(v), checked=lambda _, v=v: st["opacity"] == v, radio=True) for v in OPACITIES)),
                 ),
                 Item(
-                    "宽度",
-                    Menu(*(Item(name, self.set_width(v), checked=lambda _, v=v: st["width"] == v, radio=True) for name, v in WIDTHS.items())),
+                    lambda _: tr("宽度"),
+                    Menu(
+                        *(
+                            Item(lambda _, name=name: tr(name), self.set_width(v), checked=lambda _, v=v: st["width"] == v, radio=True)
+                            for name, v in WIDTHS.items()
+                        )
+                    ),
                     enabled=lambda _: not st["compact"],  # 小窗模式宽度固定
                 ),
                 Item(
-                    "主题",
-                    Menu(*(Item(name, self.set_theme(k), checked=lambda _, k=k: st["theme"] == k, radio=True) for k, name in THEMES.items())),
+                    lambda _: tr("主题"),
+                    Menu(
+                        *(
+                            Item(lambda _, name=name: tr(name), self.set_theme(k), checked=lambda _, k=k: st["theme"] == k, radio=True)
+                            for k, name in THEMES.items()
+                        )
+                    ),
                 ),
             ]
         else:
             # 没有 WebView2 时没有悬浮窗，只留看板入口
             items = [
-                Item("打开完整看板", lambda *_: self.open_dashboard(), default=True),
-                Item("设置...", lambda *_: self.open_settings()),
+                Item(lambda _: tr("打开完整看板"), lambda *_: self.open_dashboard(), default=True),
+                Item(lambda _: tr("设置..."), lambda *_: self.open_settings()),
             ]
+        items.append(Menu.SEPARATOR)
         if FROZEN:
-            items += [Menu.SEPARATOR, Item("开机自动启动", self.toggle_autostart, checked=lambda _: autostart_enabled())]
-        items += [Menu.SEPARATOR, Item(f"版本 {__version__}", None, enabled=False), Item("退出", self.quit)]
+            items.append(Item(lambda _: tr("开机自动启动"), self.toggle_autostart, checked=lambda _: autostart_enabled()))
+        items += [
+            Item(lambda _: tr("自动检查更新"), self.toggle_check_update, checked=lambda _: st["check_update"]),
+            Item(lambda _: tr("检查更新..."), self.check_update_now),
+            Menu.SEPARATOR,
+            # 查到新版本后才出现
+            Item(self.update_label, self.open_update, visible=lambda _: self.updates.latest is not None),
+            Item(lambda _: tr("版本 {v}", v=__version__), None, enabled=False),
+            Item(lambda _: tr("退出"), self.quit),
+        ]
         self.icon = pystray.Icon("AIInferPeek", make_icon_image(), APP_NAME, menu=Menu(*items))
+        self.watch_tray_session_end()

@@ -11,6 +11,7 @@ import socket
 
 import psutil
 
+from ..i18n import tr
 from .lhm import LhmReader
 from .pdh import PdhError, PdhQuery
 
@@ -22,7 +23,7 @@ def _cpu_name():
         with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"HARDWARE\DESCRIPTION\System\CentralProcessor\0") as key:
             return winreg.QueryValueEx(key, "ProcessorNameString")[0].strip()
     except OSError:
-        return platform.processor() or "未知 CPU"
+        return platform.processor() or tr("未知 CPU")
 
 
 def rapl_power(values):

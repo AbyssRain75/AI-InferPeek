@@ -17,6 +17,7 @@ import time
 
 import psutil
 
+from ..i18n import N_, tr
 from .base import prune
 from .cli import LOST, CliAdapter, MAX_SESSIONS, RECENT, STALE, Rate, newest_version, outcome, session, summarize, track, usage
 from .jsonl import JsonlTail, parse_ts
@@ -24,7 +25,7 @@ from .jsonl import JsonlTail, parse_ts
 TASK_FLAG = "--interaction-client-id"
 TASK_PREFIX = "local-chatgpt:"
 CONSOLE = "conhost.exe"  # Windows 给命令行程序配的控制台进程
-ERRORS = {"usage_limit_exceeded": "额度已用完"}  # task_complete 里 error.codex_error_info 的说明
+ERRORS = {"usage_limit_exceeded": N_("额度已用完")}  # task_complete 里 error.codex_error_info 的说明
 MARKERS = tuple(
     f'"type":"{t}"'.encode()
     for t in ("session_meta", "turn_context", "thread_settings_applied", "task_started", "task_complete", "turn_aborted", "token_count")
@@ -91,6 +92,7 @@ class Rollout:
         self.last = None
         self.prev_output = None  # 上一条 token_count 的累计输出；还没读到过时是 None
         self.rate = Rate()
+        self.shown = None  # 上一轮列出的会话行，没列出时是 None；文件被替换、从头重读时也清掉，和第一次读一样
 
     def update(self):
         restarted, objs = self.tail.read()
@@ -258,7 +260,7 @@ class CodexAdapter(CliAdapter):
                 continue
             rows.append(session(
                 id=task,
-                name="ChatGPT 任务",
+                name=tr("ChatGPT 任务"),
                 entry="chatgpt",
                 status="busy" if busy else "idle",
                 since=turns[task] if busy else last,
@@ -280,11 +282,20 @@ class CodexAdapter(CliAdapter):
 
         sessions = []
         for r in rollouts.values():
+            # 很大的会话文件要分几轮才读完（每轮最多 16 MiB），没读完时按读到的部分算出的状态不是现状。
+            # 第一次读（刚启动、新发现的文件、文件被替换）时不列出：不然读到回合开始、还没读到结束会显示工作中，
+            # 读完变成空闲又被当成刚完成（用时也从那时算起）。已经列出过的（一次追加了很多）照样列上一轮的样子，
+            # 读完后和它比：中间完成的回合照样提示，不会因为这几轮没列出、比不出变化而漏掉
+            if r.tail.behind:
+                if r.shown:
+                    sessions.append(r.shown)
+                continue
             if not r.id or r.last is None or now - r.last >= RECENT * 1000:
+                r.shown = None
                 continue
             busy = r.busy(now)
             tot = r.totals
-            sessions.append(session(
+            r.shown = session(
                 id=r.id,
                 name=titles.get(r.id),
                 cwd=r.cwd,
@@ -298,7 +309,8 @@ class CodexAdapter(CliAdapter):
                 rate=r.rate.per_second(now),
                 last=r.last,
                 outcome=LOST if r.turns and not busy else r.ended,
-            ))
+            )
+            sessions.append(r.shown)
         sessions += self._chatgpt_tasks(inst, now)
 
         newest = max((r for r in rollouts.values() if r.limits_t), key=lambda r: r.limits_t, default=None)

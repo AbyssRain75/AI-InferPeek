@@ -12,6 +12,7 @@ import re
 import threading
 import time
 
+from ..i18n import N_, tr
 from ..runtimes.base import HttpStatusError, request_json
 
 URL = "http://127.0.0.1:8085/data.json"
@@ -27,7 +28,7 @@ POWER_NAMES = ("cpu package", "package")
 _SENSOR_ID = re.compile(r"^/(\w*cpu)/(\d+)/(temperature|power)/")
 _NUMBER = re.compile(r"-?\d+(?:[.,]\d+)?")
 
-NOT_RUNNING = "CPU 温度要从 LibreHardwareMonitor 读，现在没连上它的网页服务（127.0.0.1:8085）：它没在运行，或者没在 Options → Remote Web Server 里勾上 Run。"
+NOT_RUNNING = N_("CPU 温度需从 LibreHardwareMonitor 读取，当前未连接其网页服务（127.0.0.1:8085）：该程序未运行，或未在 Options → Remote Web Server 中勾选 Run。")
 
 
 def _number(sensor):
@@ -81,14 +82,14 @@ def read_cpu(tree):
 def _error_text(exc):
     if isinstance(exc, HttpStatusError):
         if exc.status == 401:
-            return "LibreHardwareMonitor 的网页服务设了密码，读不了 CPU 温度：在它的 Options → Remote Web Server 里关掉 Authentication。"
-        return f"LibreHardwareMonitor 的网页服务返回 HTTP {exc.status}，读不了 CPU 温度。"
+            return tr("LibreHardwareMonitor 的网页服务设置了密码，无法获取 CPU 温度：请在其 Options → Remote Web Server 中关闭 Authentication。")
+        return tr("LibreHardwareMonitor 的网页服务返回 HTTP {status}，无法获取 CPU 温度。", status=exc.status)
     if isinstance(exc, ValueError):
-        return "127.0.0.1:8085 上的不是 LibreHardwareMonitor 的数据，读不了 CPU 温度。"
+        return tr("127.0.0.1:8085 返回的不是 LibreHardwareMonitor 的数据，无法获取 CPU 温度。")
     # 连接时出错 urllib 包成 URLError。Windows 上连本机没人监听的端口要重试 2 秒才报拒绝，先到的是 1 秒超时，也算没连上
     if isinstance(exc, TimeoutError):
-        return "LibreHardwareMonitor 的网页服务没有响应，读不了 CPU 温度。"
-    return NOT_RUNNING
+        return tr("LibreHardwareMonitor 的网页服务无响应，无法获取 CPU 温度。")
+    return tr(NOT_RUNNING)
 
 
 class LhmReader:
@@ -96,7 +97,7 @@ class LhmReader:
 
     def __init__(self, url=URL):
         self.url = url
-        self._latest = (0.0, None, None, NOT_RUNNING)  # 读到的时间、温度、功耗、原因
+        self._latest = (0.0, None, None, tr(NOT_RUNNING))  # 读到的时间、温度、功耗、原因
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="lhm", daemon=True)
         self._thread.start()
@@ -112,14 +113,14 @@ class LhmReader:
         except (OSError, ValueError) as exc:
             self._latest = (time.time(), None, None, _error_text(exc))
             return False
-        note = None if temp is not None else "LibreHardwareMonitor 里没有 CPU 温度：它要以管理员身份运行，装好驱动才读得到。"
+        note = None if temp is not None else tr("LibreHardwareMonitor 中无 CPU 温度：需以管理员身份运行并安装驱动后方可读取。")
         self._latest = (time.time(), temp, power, note)
         return True
 
     def latest(self):
         t, temp, power, note = self._latest
         if note is None and time.time() - t > STALE:
-            return None, None, f"LibreHardwareMonitor 超过 {STALE:g} 秒没有新数据。"
+            return None, None, tr("LibreHardwareMonitor 超过 {n} 秒无新数据。", n=f"{STALE:g}")
         return temp, power, note
 
     def close(self):

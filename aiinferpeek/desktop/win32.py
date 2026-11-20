@@ -17,6 +17,9 @@ LWA_ALPHA = 0x2
 SW_HIDE, SW_SHOWNOACTIVATE, SW_RESTORE = 0, 4, 9
 SWP_NOSIZE, SWP_NOZORDER, SWP_NOACTIVATE = 0x1, 0x4, 0x10
 DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND = 33, 2
+# 关机、重启、注销时系统先发 WM_QUERYENDSESSION 问每个窗口能不能结束（回 0 就是“不行”，会拦住关机），
+# 都同意后再发 WM_ENDSESSION（wParam 非 0 表示真的要结束，0 表示被取消了），处理完这条进程随时会被结束
+WM_QUERYENDSESSION, WM_ENDSESSION = 0x0011, 0x0016
 
 user32.FindWindowW.restype = wintypes.HWND
 user32.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]

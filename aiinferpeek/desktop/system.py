@@ -78,7 +78,7 @@ def webview2_version():
     return None
 
 
-MB_YESNO, MB_ICONWARNING, MB_ICONINFORMATION, IDYES = 0x4, 0x30, 0x40, 6
+MB_YESNO, MB_ICONWARNING, MB_ICONINFORMATION, MB_SETFOREGROUND, IDYES = 0x4, 0x30, 0x40, 0x10000, 6
 
 
 def message_box(text, flags=MB_ICONINFORMATION, owner=None):

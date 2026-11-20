@@ -464,6 +464,16 @@ body.compact .rt-big {
   width: 36px;
 }
 
+/* 英文的“VRAM”“RAM”比“显存”“内存”宽，上面的宽度放不下，会压到后面的数字上：右列（用量那一列，每行第二格）的标签
+   按“VRAM”“VRAM1”放宽，两行的数字照样对齐；左列的“GPU”“CPU”和中文界面不变。长名字（.wide）还是按实际宽度 */
+.c-cell:nth-child(even) .m-label:lang(en):not(.wide) {
+  width: 37px;
+}
+
+.c-grid.multi-gpu .c-cell:nth-child(even) .m-label:lang(en):not(.wide) {
+  width: 44px;
+}
+
 /* 比“显存”长的名字（只有核显时的“共享显存”）按实际宽度 */
 .c-grid .c-cell .m-label.wide {
   width: auto;

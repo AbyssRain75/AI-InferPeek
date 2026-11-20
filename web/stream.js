@@ -1,6 +1,7 @@
 // 看板和悬浮窗共用：连接 /api/stream 接收样本，标题栏的状态点显示实时 / 数据停更（连着但没有新样本）/ 连接断开。
 
 import { elapsed } from './ui.js';
+import { tr } from './i18n.js';
 
 // onInit(data)：连上（断线重连也是）时收到的静态信息和全部历史；onSample(s)：每条新样本。
 // 收到数据后看得见时调 render()；hidden() 为 true 时只收数据、不渲染，重新看得见时调返回的 refresh() 补一次。
@@ -17,8 +18,8 @@ export function connectStream({ onInit, onSample, render, hidden = () => documen
     const status = !connected ? 'down' : idle > Math.max(5, interval * 5) * 1000 ? 'stalled' : 'live';
     el.classList.toggle('is-live', status === 'live');
     el.classList.toggle('is-stalled', status === 'stalled');
-    el.querySelector('.label').textContent = { live: '实时', stalled: '数据停更', down: downText }[status];
-    el.title = status === 'stalled' ? `已经 ${elapsed(idle)}没有收到新数据，后台采集可能卡住了` : '';
+    el.querySelector('.label').textContent = { live: tr('实时'), stalled: tr('数据停更'), down: downText }[status];
+    el.title = status === 'stalled' ? tr('已 {time}未收到新数据，后台采集可能已停滞', { time: elapsed(idle) }) : '';
     document.body.classList.toggle('stale', status !== 'live');
   }
 

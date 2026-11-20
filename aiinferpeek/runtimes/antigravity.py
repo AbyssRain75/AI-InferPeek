@@ -21,12 +21,12 @@ import re
 import ssl
 import time
 import urllib.request
-from urllib.parse import unquote, urlsplit
 
 import psutil
 
+from ..i18n import N_
 from . import protobuf, sqlite
-from .cli import LOST, CliAdapter, MAX_SESSIONS, RECENT, STALE, Rate, outcome, session, summarize, track, usage
+from .cli import LOST, CliAdapter, MAX_SESSIONS, RECENT, STALE, Rate, outcome, session, summarize, track, uri_path, usage
 from .jsonl import parse_ts
 
 # conversation_summaries 的 status 列（CascadeRunStatus）：运行中、正在取消、忙都算在工作，IDLE 是空闲
@@ -37,9 +37,9 @@ SUMMARY_INTERRUPTED, SUMMARY_END = 25, 28
 ENDS = {
     1: outcome("failed"),
     2: outcome("interrupted"),
-    3: outcome("failed", "达到工具调用次数上限"),
-    6: outcome("failed", "达到工具调用次数上限"),
-    11: outcome("failed", "超出 token 预算"),
+    3: outcome("failed", N_("达到工具调用次数上限")),
+    6: outcome("failed", N_("达到工具调用次数上限")),
+    11: outcome("failed", N_("超出 token 预算")),
 }
 # steps 表的 step_type（CortexStepType）和 status（CortexStepStatus）
 PLANNER_RESPONSE = 15  # 模型的一次回复，metadata 里有这次的 token 用量
@@ -128,13 +128,21 @@ class Quota:
         self.port = {}  # 进程号 -> 能用的端口
         self.limits = None
 
+    def _candidates(self, pid):
+        """要试的端口：先是上次能用的，调通了就不用再找；之后才列它监听的端口（要枚举整张 TCP 表，能省就省）。"""
+        known = self.port.get(pid)
+        if known:
+            yield known
+        for port in self.ports(pid):
+            if port != known:
+                yield port
+
     def update(self, servers, now):
         """servers：[(进程号, csrf 令牌)]；now 是秒。"""
         if now < self.next:
             return
         for pid, token in servers:
-            known = self.port.get(pid)
-            for port in ([known] if known else []) + [p for p in self.ports(pid) if p != known]:
+            for port in self._candidates(pid):
                 try:
                     status = self.fetch(port, token)
                 except (OSError, ValueError):
@@ -164,19 +172,6 @@ def _flag(cmdline, name):
         if a.startswith(name + "="):
             return a[len(name) + 1:]
     return None
-
-
-def uri_path(uri):
-    """file:///g%3A/Novel%20AI 这样的地址转成本机路径，不是 file 地址的原样返回。"""
-    parts = urlsplit(uri)
-    if parts.scheme != "file":
-        return uri
-    path = unquote(parts.path)
-    if parts.netloc:  # 共享文件夹 \\服务器\共享
-        path = f"//{parts.netloc}{path}"
-    elif len(path) > 2 and path[0] == "/" and path[2] == ":":
-        path = path[1:]
-    return os.path.normpath(path)
 
 
 def _workspace(uris):
@@ -284,7 +279,7 @@ class AntigravityAdapter(CliAdapter):
     kind = "antigravity"
     label = "Antigravity"
     process_names = frozenset({"antigravity.exe", "antigravity", "language_server.exe", "language_server"})
-    match_hint = "language_server 要在启动参数里带 antigravity"
+    match_hint = N_("language_server 的启动参数中需包含 antigravity")
     config_key = "antigravity_dir"
 
     def __init__(self, home=None):

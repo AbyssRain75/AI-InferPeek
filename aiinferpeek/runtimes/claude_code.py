@@ -19,6 +19,7 @@ import time
 
 import psutil
 
+from ..i18n import N_
 from .base import prune
 from .cli import CliAdapter, Rate, newest_version, outcome, read_json, session, summarize, usage
 from .jsonl import JsonlTail, parse_ts
@@ -27,7 +28,7 @@ FIND_RETRY = 5.0  # 秒，新会话第一条消息之前还没有记录文件，
 FILETIME_EPOCH = 11644473600  # 1601-01-01 到 1970-01-01 的秒数
 SETTLE = 3000  # 毫秒，登记里变成空闲后，会话记录里的结束标记可能晚一点才写进去，最多等这么久
 INTERRUPTED = "[Request interrupted by user"  # 后面可能还有 " for tool use]"
-API_ERRORS = {"rate_limit": "触发频率限制", "server_error": "服务端出错"}  # 接口出错消息的 error 字段
+API_ERRORS = {"rate_limit": N_("触发频率限制"), "server_error": N_("服务端出错")}  # 接口出错消息的 error 字段
 PLAN_FILE = "plan-usage-history.json"
 PLAN_CHECK = 30.0  # 秒，多久重新读一次桌面版的用量记录（它最快 15 分钟记一次）
 # 用量记录里的字段 -> 页面上的额度窗口（和 Codex 的一样，primary 是 5 小时、secondary 是每周），窗口长度（分钟）
@@ -209,7 +210,7 @@ class Transcript:
 class ClaudeCodeAdapter(CliAdapter):
     kind = "claude-code"
     label = "Claude Code"
-    match_hint = "按 Claude Code 在数据目录的 sessions 文件夹里登记的进程找"
+    match_hint = N_("根据 Claude Code 在数据目录的 sessions 文件夹中登记的进程查找")
     config_key = "claude_dir"
 
     def __init__(self, home=None, desktop=None):

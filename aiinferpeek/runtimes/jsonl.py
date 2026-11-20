@@ -1,4 +1,4 @@
-"""增量读取一直在追加的 JSONL 文件（Claude Code、Codex 的会话记录）。
+"""增量读取一直在追加的 JSONL 文件（Claude Code、Codex、WorkBuddy 的会话记录）。
 
 会话记录里有对话原文。这里先按字节匹配标记，只解析含有标记的行，调用方也只取用量和状态字段，其余内容直接丢弃。
 每次打开读完就关，不占着文件。
@@ -6,15 +6,20 @@
 
 import json
 import os
+import re
 from datetime import datetime
 
 CHUNK = 16 * 1024 * 1024  # 每次最多读这么多，很大的文件分几次读完，不卡住轮询
+_FRACTION = re.compile(r"\.(\d+)")  # 秒的小数部分
 
 
 def parse_ts(value):
-    """ISO 时间（结尾可能是 Z）转成毫秒，解析不了返回 None。"""
+    """ISO 时间（结尾可能是 Z）转成毫秒，解析不了返回 None。
+
+    秒的小数补齐或截到 6 位：Python 3.10 的 fromisoformat 只认 3 位或 6 位，Antigravity 库里的时间是 7 位。"""
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp() * 1000
+        text = _FRACTION.sub(lambda m: "." + m.group(1)[:6].ljust(6, "0"), value.replace("Z", "+00:00"), count=1)
+        return datetime.fromisoformat(text).timestamp() * 1000
     except (AttributeError, ValueError):
         return None
 
@@ -31,9 +36,12 @@ class JsonlTail:
         self.ident = None
         self.pos = 0
         self.rest = b""
+        # 上次读完还没到文件末尾（很大的文件一次最多读 CHUNK）：这时读到的只是前面的历史，按它算出的状态不是现状
+        self.behind = False
 
     def read(self):
-        """返回 (是否从头重读, 新增的对象列表)。文件被截断或替换时从头重读，调用方应清空之前的统计。"""
+        """返回 (是否从头重读, 新增的对象列表)。文件被截断或替换时从头重读，调用方应清空之前的统计。
+        读完后 behind 说明还有没读到的（下一次接着读）。"""
         try:
             st = os.stat(self.path)
         except OSError:
@@ -45,6 +53,7 @@ class JsonlTail:
         if restarted:
             self.pos, self.rest = 0, b""
         if size == self.pos:
+            self.behind = False
             return restarted, []
         try:
             with open(self.path, "rb") as f:
@@ -56,6 +65,7 @@ class JsonlTail:
         except OSError:
             return restarted, []
         self.pos += len(chunk)
+        self.behind = self.pos < size
         lines = (self.rest + chunk).split(b"\n")
         self.rest = lines.pop()
         out = []

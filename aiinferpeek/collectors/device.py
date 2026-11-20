@@ -1,4 +1,6 @@
-"""这台电脑：aiinferpeek.json 里给它起的名字（device_name）。计算机名在 CPU 的静态信息里（cpu.host）。"""
+"""这台电脑：aiinferpeek.json 里给它起的名字（device_name）、界面语言。计算机名在 CPU 的静态信息里（cpu.host）。"""
+
+from .. import i18n
 
 
 class DeviceCollector:
@@ -11,8 +13,9 @@ class DeviceCollector:
         return {}
 
     def sample(self):
-        # 名字放在每条样本里：设置页面保存后，看板和悬浮窗下一秒就换上，不用刷新或重连
-        return {"name": self.display_name}
+        # 名字放在每条样本里：设置页面保存后，看板和悬浮窗下一秒就换上，不用刷新或重连。
+        # 界面语言也是：页面发现和自己加载时的不一样就重新加载（见 web/i18n.js 的 followLanguage）
+        return {"name": self.display_name, "lang": i18n.current()}
 
     def slim(self, data):
         return None  # 画曲线用不到，历史里不留
